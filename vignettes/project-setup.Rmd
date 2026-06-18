@@ -1,0 +1,213 @@
+---
+title: "Integrating crew.ssh into a targets project"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Integrating crew.ssh into a targets project}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(eval = FALSE, comment = "#>")
+```
+
+This guide shows how to wire `crew.ssh` into a [`targets`](https://docs.ropensci.org/targets/)
+project so that heavy targets run across a small SSH cluster. It assumes the
+cluster itself is already reachable (passwordless SSH, shared/identical project
+path on every node); see `vignette("setup")` for that. The patterns here suit an
+[`renv`](https://rstudio.github.io/renv/) project that vendors its packages,
+optionally as git submodules - a common layout - but adapt freely.
+
+`crew.ssh` is **experimental**; expect breaking changes.
+
+## The shape of the integration
+
+A working setup has five pieces:
+
+1. **`crew.ssh` installed** in the project library (and recorded in `renv.lock`).
+2. **`_hosts.R`** - a gitignored, control-node-only file holding the cluster
+   config as `crew.ssh.*` options. The single source of truth.
+3. **`_hosts.R.example`** - a committed template.
+4. **A node-provisioning helper** (`scripts/sync-nodes.R`) that pushes the project
+   + packages to each node. A ready template ships with this package.
+5. **`_targets.R` wiring** that reads `_hosts.R` and builds the controller.
+
+Only `_hosts.R` is project-specific; everything else is reusable.
+
+## 1. Install crew.ssh (and record it in renv.lock)
+
+If you vendor packages from GitHub, install + record it in one step:
+
+```{r}
+renv::install("youruser/crew.ssh", lock = TRUE, prompt = FALSE)
+```
+
+`lock = TRUE` adds **only** crew.ssh to `renv.lock` (targeted). Then commit
+`renv.lock`. The worker nodes will get crew.ssh when their `renv::restore()` runs
+(step 4).
+
+**Do not** run a plain `renv::snapshot()` to add it: in a project whose
+lockfile contains development-only packages (testthat, roxygen2, devtools, ...
+which show as `used = n` in `renv::status()`), the default implicit snapshot will
+**prune** them from `renv.lock`. Use `renv::install(..., lock = TRUE)` or
+`renv::record(...)` for targeted, additive lockfile edits, and keep
+`git diff renv.lock` as a safety net.
+
+(If crew.ssh is a local source tree rather than a GitHub repo, use
+`renv::install("./path/to/crew.ssh")` - note the leading `./`.)
+
+## 2. `_hosts.R` (the single source of truth)
+
+Create `_hosts.R` at the project root and **gitignore it** (`echo _hosts.R >> .gitignore`).
+It lives only on the control node; worker nodes never read it. All options use the
+project-agnostic `crew.ssh.` prefix and are consumed by both `sync-nodes.R` and
+your `_targets.R` wiring:
+
+```{r}
+# _hosts.R
+options(
+  crew.ssh.nodes   = c(node1 = 8L, node2 = 16L), # host = per-node worker capacity
+  crew.ssh.projdir = "/home/you/myproject",       # identical path on every node
+  crew.ssh.tunnel  = TRUE,                         # reverse-tunnel dial-back (firewall-free)
+  crew.ssh.branch  = "main",                       # branch sync-nodes fast-forwards
+  crew.ssh.symlinks = c(                           # symlinks sync-nodes (re)creates in projdir
+    inputs  = "/mnt/shared/myproject/inputs",
+    outputs = "/mnt/shared/myproject/outputs"
+  )
+  # direct dial-back only (crew.ssh.tunnel = FALSE):
+  # crew.ssh.host = "control-node",  # control address reachable from workers
+  # crew.ssh.port = 5555L,           # FIXED dial-back port (open it in the firewall)
+  # optional: override the remote Rscript (default tracks the renv.lock R version):
+  # crew.ssh.rscript = "Rscript-4.6.0"
+)
+```
+
+Commit a sanitized `_hosts.R.example` (the block above with placeholder values) so
+collaborators know the schema.
+
+Per-node capacity (`caps`) is whatever a node can safely run at once; for RAM-bound
+tasks, `cap = floor(usable_RAM / per_task_RAM)`. Because the dispatcher mixes tasks
+across nodes and is not memory-aware, size a single controller for the heaviest
+task, or split heavy and light work into separate controllers.
+
+## 3. Provision the nodes (sync-nodes helper)
+
+A node-provisioning helper ships with this package. Copy it into your project:
+
+```{r}
+file.copy(
+  system.file("templates/sync-nodes.R", package = "crew.ssh"),
+  "scripts/sync-nodes.R"
+)
+```
+
+It reads `_hosts.R` and, for each node over SSH: fast-forwards `crew.ssh.branch`,
+updates git submodules, (re)creates `crew.ssh.symlinks`, and runs
+`renv::restore()` (which installs/updates whatever `renv.lock` specifies, including
+crew.ssh once recorded). It is non-destructive (reports FAILED rather than
+resetting), reads the R version from `renv.lock` (so an R upgrade is a one-line
+change), and supports `--dry-run`. Run it from the project root on the control
+node (after pushing, so the nodes can fetch):
+
+```sh
+Rscript scripts/sync-nodes.R --dry-run   # preview the remote script
+Rscript scripts/sync-nodes.R             # apply
+```
+
+Each node needs git access to any private submodules, the project at
+`crew.ssh.projdir`, and a per-node `renv` library (do not share an renv *library*
+over a network filesystem across machines).
+
+## 4. Wire `_targets.R`
+
+Read `_hosts.R`, build the SSH controller when nodes are configured, and fall back
+to a local controller otherwise (so a laptop / CI run still works). Keep light or
+shared-service pools (downloads, etc.) local on the control node.
+
+```{r}
+if (file.exists("_hosts.R")) source("_hosts.R")
+
+ssh_nodes <- getOption("crew.ssh.nodes")
+controller <-
+  if (is.null(ssh_nodes)) {
+    crew::crew_controller_local(name = "primary", workers = 4L)
+  } else {
+    crew::crew_controller_group(
+      crew.ssh::crew_controller_ssh(
+        name    = "primary",
+        nodes   = ssh_nodes,
+        projdir = getOption("crew.ssh.projdir"),
+        tunnel  = getOption("crew.ssh.tunnel", TRUE),
+        host    = getOption("crew.ssh.host"),    # ignored when tunnel = TRUE
+        port    = getOption("crew.ssh.port"),    # ignored when tunnel = TRUE
+        rscript = getOption("crew.ssh.rscript"), # NULL -> the session's R (homogeneous)
+        seconds_idle = Inf,                      # persistent workers
+        crashes_max  = 25L
+      ),
+      crew::crew_controller_local(name = "download", workers = 8L, seconds_idle = 60)
+    )
+  }
+
+targets::tar_option_set(controller = controller)
+```
+
+Route a target to a pool with
+`tar_resources(crew = tar_resources_crew(controller = "primary"))`. Note that
+`tar_resources_crew(controller =)` is length-1: a branched target goes to ONE
+controller, so spreading one heavy branched target across nodes is done by the
+single capacity-weighted `primary` controller, not by per-node controllers.
+
+## 5. Verify
+
+Preflight (read-only) before any real run:
+
+```{r}
+crew.ssh::crew_ssh_check(
+  nodes   = getOption("crew.ssh.nodes"),
+  projdir = getOption("crew.ssh.projdir"),
+  packages = c("crew", "targets")
+)
+#> crew.ssh preflight: 2/2 node(s) OK
+```
+
+Then a small smoke test of the full path:
+
+```{r}
+ctrl <- crew.ssh::crew_controller_ssh(
+  nodes = getOption("crew.ssh.nodes"),
+  projdir = getOption("crew.ssh.projdir"),
+  tunnel = TRUE, seconds_idle = 10
+)
+ctrl$start()
+for (i in 1:6) ctrl$push(command = Sys.info()[["nodename"]], name = sprintf("t%d", i))
+ctrl$wait(seconds_timeout = 120)
+res <- character(0)
+repeat {
+  r <- ctrl$pop()
+  if (is.null(r)) break
+  res <- c(res, r$result[[1]])
+}
+ctrl$terminate()
+length(res) # expect 6, spread across > 1 node
+```
+
+## Notes and gotchas
+
+- **Control node vs workers.** The control node runs `tar_make` / the dispatcher
+  and needs `crew.ssh`; it does not need to run sshd (it dials out). Worker nodes
+  need `crew` plus every package your tasks use; they do not strictly need
+  `crew.ssh`, though `renv::restore()` installs it everywhere if it is in the lock.
+- **Dial-back is not SSH.** A worker's connection back to the dispatcher is a raw
+  TCP socket, so it ignores `~/.ssh/config` / custom SSH ports. On a firewalled
+  network use `tunnel = TRUE` (no inbound port) rather than opening ports; see
+  `vignette("setup")`.
+- **Local packages from GitHub.** If your vendored packages are recorded in
+  `renv.lock` as `Source: GitHub`, `renv::restore()` installs them from GitHub on
+  each node; `renv::install("path")` for a git-submodule path can fail (renv tries
+  to resolve it as a remote) - use the `"user/repo"` spec.
+- **Re-provision after package changes.** When a vendored package changes, record
+  the new version (`renv::install("user/pkg", lock = TRUE)`), commit + push
+  `renv.lock`, then re-run `sync-nodes.R` so the nodes pick it up.
+- See also `vignette("setup")` for SSH keys, `known_hosts`, `~/.ssh/config`, the
+  reverse tunnel, and the env-driven integration tests.
+```
