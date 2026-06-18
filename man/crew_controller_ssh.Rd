@@ -12,6 +12,7 @@ crew_controller_ssh(
   homogeneous = TRUE,
   ssh_options = c("-o", "BatchMode=yes", "-o", "ServerAliveInterval=30"),
   request_tty = FALSE,
+  tunnel = FALSE,
   host = NULL,
   port = NULL,
   tls = crew::crew_tls(),
@@ -70,6 +71,12 @@ merged / altered worker stdout-stderr capture. Default \code{FALSE}; the worker'
 own idle / wall timeouts already bound how long a stranded worker survives.
 Note this does not reap child processes the worker spawns (such as a
 \verb{docker run} container); the worker code must tear those down itself.}
+
+\item{tunnel}{Logical: if \code{TRUE}, workers dial the dispatcher back through an
+SSH reverse tunnel (\code{ssh -R}) instead of a direct TCP connection, so NO
+inbound port needs to be open on the control node (ideal for firewalled
+networks, and more secure -- the dispatcher binds \verb{127.0.0.1} only). Forces
+\code{host = "127.0.0.1"} (any supplied \code{host} is ignored). Default \code{FALSE}.}
 
 \item{host}{Local (control-node) host name or IP that remote workers dial
 back into. Must be reachable from the worker nodes.}
@@ -192,8 +199,10 @@ the network. In practice this needs:
 \item passwordless SSH (keys) from the control machine to every node;
 \item the same project + R library reachable at \code{projdir} on every node (for
 example a shared network filesystem, or identical local checkouts);
-\item \code{host} set to a network address the worker nodes can reach (NOT
-\verb{127.0.0.1}), with the chosen TCP port reachable.
+\item for direct dial-back (\code{tunnel = FALSE}): \code{host} set to an address the worker
+nodes can reach (NOT \verb{127.0.0.1}) with the dispatcher's TCP port reachable;
+\item for \code{tunnel = TRUE}: nothing extra -- the dial-back rides the SSH connection,
+so no inbound port is opened (best for firewalled networks).
 }
 }
 

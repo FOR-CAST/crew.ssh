@@ -167,6 +167,32 @@ The trade-off is that `-tt` merges and alters worker stdout-stderr capture, so i
 One boundary to keep in mind: neither SSH nor `crew` reaps **child processes the worker spawns**, such as a `docker run` container.
 If a task launches one, the task code must tear it down itself (for example `docker run --rm` plus stopping the container when the R worker exits).
 
+## Firewalled networks: reverse-tunnel dial-back
+
+By default a worker dials the dispatcher back over a *direct* TCP connection
+(`tcp://<host>:<port>`).
+That is not SSH, so it ignores `~/.ssh/config` and any custom SSH ports, and it
+needs that port reachable from the worker nodes - a problem behind a firewall
+(`ufw` / `firewalld`).
+
+Set `tunnel = TRUE` to dial back through an **SSH reverse tunnel** instead:
+
+```{r}
+crew_controller_ssh(
+  nodes = c(host1 = 8L, host2 = 16L),
+  projdir = "/home/you/myproject",
+  tunnel = TRUE
+)
+```
+
+The dispatcher then binds `127.0.0.1`, and each worker is launched with
+`ssh -R <node-port>:127.0.0.1:<dispatcher-port>`, so the dial-back rides the
+existing SSH connection.
+No inbound firewall port is opened, custom SSH ports keep working (the launch is
+still a plain `ssh <host>`), and the dispatcher is not exposed on the network at
+all.
+This is the recommended mode on locked-down clusters.
+
 ## Security notes
 
 - **Keys are never handled by the package.**

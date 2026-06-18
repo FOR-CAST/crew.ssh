@@ -14,19 +14,44 @@ weighted_pick <- function(assigned, caps) {
   which.min(assigned / caps)
 }
 
+## Extract the dispatcher TCP port from a crew_worker() call's url
+## (tcp://127.0.0.1:PORT or tcp://localhost:PORT); NA_integer_ if not found.
+## Used only in reverse-tunnel mode. Internal.
+dispatcher_port <- function(call) {
+  m <- regmatches(call, regexpr("tcp://(?:127\\.0\\.0\\.1|localhost):[0-9]+", call, perl = TRUE))
+  if (!length(m)) {
+    return(NA_integer_)
+  }
+  as.integer(sub(".*:", "", m))
+}
+
+## Rewrite the url port in a crew_worker() call so the worker dials its node-local
+## reverse-tunnel port instead of the dispatcher port directly. Internal.
+rewrite_url_port <- function(call, from_port, to_port) {
+  sub(
+    sprintf("(tcp://(?:127\\.0\\.0\\.1|localhost):)%d\\b", from_port),
+    sprintf("\\1%d", to_port),
+    call,
+    perl = TRUE
+  )
+}
+
 ## Build the argument vector for the `ssh` client that launches one worker:
-##   c([-tt], <ssh options>, <host>, "cd <projdir> && <rscript> [r_arguments] -e '<call>'")
+##   c([-tt], [-R <fwd> -o ExitOnForwardFailure=yes], <ssh options>, <host>,
+##     "cd <projdir> && <rscript> [r_arguments] -e '<call>'")
 ## `spec` is a normalized crew_ssh_node (host/rscript/projdir/ssh_options
 ## resolved); `call` is crew's crew_worker() call string. Paths and the call are
 ## shQuote()d for the remote shell. `request_tty` prepends `-tt` (force a remote
 ## pseudo-tty) so the remote R receives SIGHUP and dies when the local ssh client
-## is killed. Pure + side-effect-free so it is unit-testable without spawning ssh.
-## Internal.
-build_ssh_args <- function(spec, call, r_arguments = NULL, request_tty = FALSE) {
+## is killed. `tunnel` (e.g. "49152:127.0.0.1:55000") adds a reverse port-forward
+## so the worker dials the dispatcher back over the ssh connection (no inbound
+## port needed). Pure + side-effect-free so it is unit-testable. Internal.
+build_ssh_args <- function(spec, call, r_arguments = NULL, request_tty = FALSE, tunnel = NULL) {
   command <- c(shQuote(spec$rscript), r_arguments, "-e", shQuote(call))
   remote <- sprintf("cd %s && %s", shQuote(spec$projdir), paste(command, collapse = " "))
   tty <- if (isTRUE(request_tty)) "-tt"
-  c(tty, spec$ssh_options, spec$host, remote)
+  forward <- if (!is.null(tunnel)) c("-R", tunnel, "-o", "ExitOnForwardFailure=yes")
+  c(tty, forward, spec$ssh_options, spec$host, remote)
 }
 
 #' SSH launcher class
@@ -58,6 +83,15 @@ build_ssh_args <- function(spec, call, r_arguments = NULL, request_tty = FALSE) 
 #' `docker run` container) are owned by their own service and are not reaped by
 #' SSH or `crew`; the worker code is responsible for tearing those down.
 #'
+#' @section Reverse-tunnel dial-back:
+#' With `tunnel = TRUE` (in [crew_controller_ssh()]) the dispatcher binds
+#' `127.0.0.1` and each worker is launched with `ssh -R <node-port>:127.0.0.1:<dispatcher-port>`,
+#' so the worker dials a node-local port that is forwarded back to the dispatcher
+#' over the existing SSH connection. No inbound firewall port is opened on the
+#' control node, which suits locked-down networks. Each worker gets a distinct
+#' node-local port (so co-located workers do not collide) and the tunnel lives
+#' and dies with that worker's `ssh` process.
+#'
 #' @family ssh
 #' @export
 crew_class_launcher_ssh <- R6Class(
@@ -73,6 +107,10 @@ crew_class_launcher_ssh <- R6Class(
     #' @field request_tty Logical; if `TRUE`, launch with `ssh -tt` so the remote
     #'   R is killed when the local ssh client is. Set by [crew_controller_ssh()].
     request_tty = FALSE,
+    #' @field tunnel Logical; if `TRUE`, the worker dials the dispatcher back
+    #'   through an SSH reverse tunnel (no inbound port needed). Requires the
+    #'   dispatcher on `127.0.0.1`. Set by [crew_controller_ssh()].
+    tunnel = FALSE,
     #' @description Launch one worker as a remote R process over SSH.
     #' @param call Character string with the `crew::crew_worker()` call to run on
     #'   the worker (supplied by `crew`).
@@ -84,11 +122,27 @@ crew_class_launcher_ssh <- R6Class(
       if (is.function(private$.log_prepare)) {
         private$.log_prepare()
       }
+      tunnel <- NULL
+      if (isTRUE(self$tunnel)) {
+        dport <- dispatcher_port(call)
+        if (is.na(dport)) {
+          stop(
+            "crew.ssh: cannot determine the dispatcher port for the reverse ",
+            "tunnel; the controller host must be '127.0.0.1' (use ",
+            "crew_controller_ssh(tunnel = TRUE)).",
+            call. = FALSE
+          )
+        }
+        ## worker dials its node-local port; ssh -R forwards it to the dispatcher.
+        rport <- private$.next_tunnel_port()
+        call <- rewrite_url_port(call, dport, rport)
+        tunnel <- sprintf("%d:127.0.0.1:%d", rport, dport)
+      }
       ## build_ssh_args() cd's into projdir first so the remote .Rprofile / renv
       ## activate and relative paths resolve, then runs the crew_worker() call.
       processx::process$new(
         command = "ssh",
-        args = build_ssh_args(spec, call, private$.r_arguments, self$request_tty),
+        args = build_ssh_args(spec, call, private$.r_arguments, self$request_tty, tunnel),
         cleanup = TRUE,
         stdout = private$.log_path("stdout", name),
         stderr = private$.log_path("stderr", name)
@@ -99,6 +153,13 @@ crew_class_launcher_ssh <- R6Class(
     ## cumulative launches per node (named integer vector); lazily initialized
     ## from `caps` on first use so it can be set after construction.
     .assigned = NULL,
+    ## monotonic counter -> a distinct node-local reverse-tunnel port per launch
+    ## (private/dynamic range 49152-59151) so co-located workers never collide.
+    .tunnel_counter = 0L,
+    .next_tunnel_port = function() {
+      private$.tunnel_counter <- private$.tunnel_counter + 1L
+      49152L + ((private$.tunnel_counter - 1L) %% 10000L)
+    },
     .pick_node = function() {
       if (is.null(private$.assigned)) {
         private$.assigned <- self$caps * 0L

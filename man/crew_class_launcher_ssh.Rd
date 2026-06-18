@@ -35,6 +35,17 @@ capture). Note that any \emph{child processes the worker spawns} (for example a
 SSH or \code{crew}; the worker code is responsible for tearing those down.
 }
 
+\section{Reverse-tunnel dial-back}{
+
+With \code{tunnel = TRUE} (in \code{\link[=crew_controller_ssh]{crew_controller_ssh()}}) the dispatcher binds
+\verb{127.0.0.1} and each worker is launched with \verb{ssh -R <node-port>:127.0.0.1:<dispatcher-port>},
+so the worker dials a node-local port that is forwarded back to the dispatcher
+over the existing SSH connection. No inbound firewall port is opened on the
+control node, which suits locked-down networks. Each worker gets a distinct
+node-local port (so co-located workers do not collide) and the tunnel lives
+and dies with that worker's \code{ssh} process.
+}
+
 \seealso{
 Other ssh:
 \code{\link[=crew_controller_ssh]{crew_controller_ssh()}},
@@ -56,6 +67,10 @@ keyed by host. Set by \code{\link[=crew_controller_ssh]{crew_controller_ssh()}}.
 
     \item{\code{request_tty}}{Logical; if \code{TRUE}, launch with \code{ssh -tt} so the remote
 R is killed when the local ssh client is. Set by \code{\link[=crew_controller_ssh]{crew_controller_ssh()}}.}
+
+    \item{\code{tunnel}}{Logical; if \code{TRUE}, the worker dials the dispatcher back
+through an SSH reverse tunnel (no inbound port needed). Requires the
+dispatcher on \verb{127.0.0.1}. Set by \code{\link[=crew_controller_ssh]{crew_controller_ssh()}}.}
   }
   \if{html}{\out{</div>}}
 }

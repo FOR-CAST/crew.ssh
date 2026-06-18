@@ -34,6 +34,38 @@ test_that("build_ssh_args prepends -tt only when request_tty = TRUE", {
   expect_false("-tt" %in% build_ssh_args(spec, "f()"))
 })
 
+test_that("dispatcher_port extracts the port from a crew_worker url", {
+  call <- 'crew::crew_worker(settings = list(url = "tcp://127.0.0.1:57231", x = 1))'
+  expect_identical(dispatcher_port(call), 57231L)
+  expect_identical(dispatcher_port('list(url = "tcp://localhost:5000")'), 5000L)
+  expect_true(is.na(dispatcher_port("no url here")))
+})
+
+test_that("rewrite_url_port repoints only the dispatcher port", {
+  expect_identical(
+    rewrite_url_port('url = "tcp://127.0.0.1:57231"', 57231L, 49152L),
+    'url = "tcp://127.0.0.1:49152"'
+  )
+  ## a like-numbered token elsewhere is left untouched
+  expect_identical(
+    rewrite_url_port('x = 57231; "tcp://127.0.0.1:57231"', 57231L, 49152L),
+    'x = 57231; "tcp://127.0.0.1:49152"'
+  )
+})
+
+test_that("build_ssh_args adds the reverse-tunnel forward when requested", {
+  spec <- crew_ssh_node(
+    "host1",
+    1L,
+    rscript = "Rscript",
+    projdir = "/p",
+    ssh_options = c("-o", "BatchMode=yes")
+  )
+  args <- build_ssh_args(spec, "f()", tunnel = "49152:127.0.0.1:55000")
+  expect_identical(args[1:4], c("-R", "49152:127.0.0.1:55000", "-o", "ExitOnForwardFailure=yes"))
+  expect_false("-R" %in% build_ssh_args(spec, "f()"))
+})
+
 test_that("weighted_pick distributes launches in proportion to caps", {
   caps <- c(small = 1L, big = 3L)
   assigned <- caps * 0L

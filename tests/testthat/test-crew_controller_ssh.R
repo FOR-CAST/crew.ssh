@@ -22,6 +22,16 @@ test_that("request_tty propagates to the launcher", {
   expect_true(controller$launcher$request_tty)
 })
 
+test_that("tunnel = TRUE sets the launcher flag (dispatcher forced to localhost)", {
+  controller <- suppressMessages(crew_controller_ssh(
+    nodes = c(a = 1L),
+    projdir = "/proj",
+    tunnel = TRUE
+  ))
+  on.exit(try(controller$terminate(), silent = TRUE), add = TRUE)
+  expect_true(controller$launcher$tunnel)
+})
+
 test_that("crew_controller_ssh validates node input", {
   expect_snapshot(error = TRUE, crew_controller_ssh(nodes = c(2L), projdir = "/proj"))
 })

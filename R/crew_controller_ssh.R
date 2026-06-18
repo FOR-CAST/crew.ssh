@@ -16,8 +16,10 @@
 #' * passwordless SSH (keys) from the control machine to every node;
 #' * the same project + R library reachable at `projdir` on every node (for
 #'   example a shared network filesystem, or identical local checkouts);
-#' * `host` set to a network address the worker nodes can reach (NOT
-#'   `127.0.0.1`), with the chosen TCP port reachable.
+#' * for direct dial-back (`tunnel = FALSE`): `host` set to an address the worker
+#'   nodes can reach (NOT `127.0.0.1`) with the dispatcher's TCP port reachable;
+#' * for `tunnel = TRUE`: nothing extra -- the dial-back rides the SSH connection,
+#'   so no inbound port is opened (best for firewalled networks).
 #'
 #' @param nodes Either a named integer vector mapping host names to per-node
 #'   worker capacities (for example `c(node1 = 8L, node2 = 16L)`), or a list of
@@ -48,6 +50,11 @@
 #'   own idle / wall timeouts already bound how long a stranded worker survives.
 #'   Note this does not reap child processes the worker spawns (such as a
 #'   `docker run` container); the worker code must tear those down itself.
+#' @param tunnel Logical: if `TRUE`, workers dial the dispatcher back through an
+#'   SSH reverse tunnel (`ssh -R`) instead of a direct TCP connection, so NO
+#'   inbound port needs to be open on the control node (ideal for firewalled
+#'   networks, and more secure -- the dispatcher binds `127.0.0.1` only). Forces
+#'   `host = "127.0.0.1"` (any supplied `host` is ignored). Default `FALSE`.
 #' @param name Character of length 1, name of the controller.
 #' @param host Local (control-node) host name or IP that remote workers dial
 #'   back into. Must be reachable from the worker nodes.
@@ -78,6 +85,7 @@ crew_controller_ssh <- function(
   homogeneous = TRUE,
   ssh_options = c("-o", "BatchMode=yes", "-o", "ServerAliveInterval=30"),
   request_tty = FALSE,
+  tunnel = FALSE,
   host = NULL,
   port = NULL,
   tls = crew::crew_tls(),
@@ -98,6 +106,16 @@ crew_controller_ssh <- function(
   r_arguments = NULL,
   options_metrics = crew::crew_options_metrics()
 ) {
+  if (isTRUE(tunnel)) {
+    if (!is.null(host) && !host %in% c("127.0.0.1", "localhost")) {
+      message(
+        "crew.ssh: tunnel = TRUE binds the dispatcher to 127.0.0.1 (ignoring host = '",
+        host,
+        "')."
+      )
+    }
+    host <- "127.0.0.1"
+  }
   nodes <- normalize_nodes(
     nodes,
     rscript = rscript,
@@ -132,6 +150,7 @@ crew_controller_ssh <- function(
   launcher$nodes <- nodes
   launcher$caps <- caps
   launcher$request_tty <- request_tty
+  launcher$tunnel <- tunnel
   controller <- crew::crew_controller(
     client = client,
     launcher = launcher,
