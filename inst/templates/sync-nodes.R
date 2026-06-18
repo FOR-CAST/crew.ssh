@@ -116,7 +116,11 @@ results <- vapply(
   hosts,
   function(h) {
     cat(sprintf("\n===== %s =====\n", h))
-    status <- system2("ssh", c(ssh_opts, h, remote_script))
+    ## Pipe the script to a remote `bash -s` via stdin instead of cramming it into
+    ## argv: avoids the dash-vs-bash ambiguity (the remote login shell may differ
+    ## from the user's interactive shell) AND the multi-line-argv quirk where the
+    ## multi-line argument gets re-interpreted by the local shell.
+    status <- system2("ssh", c(ssh_opts, h, "bash -s"), input = remote_script)
     if (status != 0L) {
       cat(sprintf("!! %s FAILED (exit %d)\n", h, status))
     }
