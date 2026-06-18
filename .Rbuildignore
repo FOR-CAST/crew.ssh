@@ -1,0 +1,9 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^\.git$
+^\.github$
+^\.gitignore$
+^\.vscode$
+^[.]?air[.]toml$
+^LICENSE\.md$
+^_tmp.*$

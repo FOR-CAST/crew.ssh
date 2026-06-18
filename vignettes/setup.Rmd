@@ -1,0 +1,205 @@
+---
+title: "Setting up an SSH cluster for crew.ssh"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Setting up an SSH cluster for crew.ssh}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(eval = FALSE, comment = "#>")
+```
+
+`crew.ssh` is **experimental**.
+It launches each worker as a remote R process over SSH and assumes a **trusted local network**.
+It does no key management or brokering of its own: it shells out to your system `ssh` client, which uses your existing keys, agent, and `~/.ssh/config`.
+This guide covers getting a small cluster ready.
+The examples use `host1`, `host2`, etc. as placeholder machine names.
+
+## What every node needs
+
+1. **Passwordless SSH** from the control machine to each node (keys, below).
+2. **The same project and R library** reachable at the same `projdir` path on every node, for example a shared network filesystem (NFS) or identical local checkouts with identical package versions.
+   A worker runs `cd <projdir>` first, so the project `.Rprofile` / `renv` activates and the worker finds the packages it needs.
+3. **A reachable dial-back address.**
+   Workers connect back to the controller, so the `host` you pass must be reachable *from the worker nodes* (not `127.0.0.1`).
+
+## 1. Create an SSH key (if you do not have one)
+
+On the control machine:
+
+```bash
+ssh-keygen -t ed25519 -C "you@example.org"
+# press Enter to accept the default path (~/.ssh/id_ed25519)
+# set a passphrase, then load it once per session with ssh-agent (below)
+```
+
+Use an agent so the passphrase is entered once, not per worker launch:
+
+```bash
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_ed25519
+```
+
+## 2. Authorize the key on each node
+
+```bash
+ssh-copy-id you@host1
+ssh-copy-id you@host2
+# ... one per node
+```
+
+If the nodes share your home directory over NFS, a single `ssh-copy-id` (or appending the public key to `~/.ssh/authorized_keys` once) covers them all.
+
+## 3. Record host keys (known_hosts)
+
+`crew.ssh` passes `-o BatchMode=yes` by default, so SSH never prompts.
+That also means an **unknown host key makes the connection fail** rather than asking you to accept it.
+Record each node's host key first:
+
+```bash
+ssh-keyscan -H host1 host2 >> ~/.ssh/known_hosts
+```
+
+Keep host-key checking on (do not set `StrictHostKeyChecking=no`): it is your protection against a machine-in-the-middle on the LAN.
+
+## 4. Use names, not just IPs
+
+The per-node `host` is handed straight to `ssh`, so anything `ssh` can resolve works: a DNS name, an `/etc/hosts` entry, or - best - an `~/.ssh/config` alias.
+Aliases let you pin the user, key, and port per host without changing your R code:
+
+```
+# ~/.ssh/config
+Host host1
+    HostName 192.168.1.21
+    User you
+    IdentityFile ~/.ssh/id_ed25519
+```
+
+With that, `crew_ssh_node("host1", ...)` just works.
+
+One caveat for the **dial-back `host`** (the control-node address workers connect back to): it must resolve **on the worker nodes**, not only on the control machine.
+A name that only exists in the control node's `/etc/hosts` will not help the workers.
+Use a name every node resolves consistently (shared DNS or matching `/etc/hosts` everywhere), or the control node's IP address.
+
+## 5. Verify before you run
+
+A quick manual check:
+
+```bash
+ssh -o BatchMode=yes host1 true && echo OK
+```
+
+Then use the built-in preflight, which checks connectivity, the project directory, the resolved `Rscript`, and that the required packages load on every node at once:
+
+```{r}
+library(crew.ssh)
+
+crew_ssh_check(
+  nodes = c(host1 = 1L, host2 = 1L),
+  projdir = "/home/you/myproject",
+  packages = c("crew", "targets")
+)
+#> crew.ssh preflight: 2/2 node(s) OK
+#>    host  ssh projdir rscript r_version missing_packages   ok detail
+#> 1 host1 TRUE    TRUE    TRUE     4.6.0                  TRUE
+#> 2 host2 TRUE    TRUE    TRUE     4.6.0                  TRUE
+```
+
+If a node fails, the `detail` column carries the first error (for example a missing project directory, or `Rscript` not found on a heterogeneous node - set `rscript` for that node via `crew_ssh_node()`).
+
+## 6. The R binary on each node
+
+By default (`homogeneous = TRUE`) `crew.ssh` runs the **launching session's own** `Rscript` (`file.path(R.home("bin"), "Rscript")`) on every node, mirroring `parallelly::makeClusterPSOCK()`.
+This is a full path, so it does not depend on the remote `PATH` or on any version-suffixed name.
+It is correct when every node has the same R installation path.
+
+If a node's R lives elsewhere, override it for that node:
+
+```{r}
+crew_ssh_node("host3", workers = 8L, rscript = "/opt/R/4.6.0/bin/Rscript")
+```
+
+Or set `homogeneous = FALSE` to use bare `Rscript` from each node's `PATH` (note that non-interactive SSH sessions often have a reduced `PATH`).
+
+## 7. Put it together
+
+```{r}
+library(crew.ssh)
+
+controller <- crew_controller_ssh(
+  name = "workers",
+  nodes = c(host1 = 88L, host2 = 95L),
+  projdir = "/home/you/myproject", # same path on every node
+  host = "control-node" # reachable from the worker nodes
+)
+
+# targets:
+# targets::tar_option_set(controller = controller)
+
+# or drive crew directly:
+controller$start()
+controller$push(command = Sys.info()[["nodename"]], name = "where")
+controller$wait()
+controller$pop()$result[[1]] # the worker node's hostname
+controller$terminate()
+```
+
+## Worker teardown and cleanup
+
+On a normal stop the worker exits gracefully, and its `seconds_idle` /
+`seconds_wall` timeouts bound how long a stranded worker can survive.
+A *hard* kill of the local `ssh` client does not by itself guarantee the remote R exits.
+For prompt teardown in that case, launch with a forced pseudo-tty:
+
+```{r}
+controller <- crew_controller_ssh(
+  nodes = c(host1 = 88L, host2 = 95L),
+  projdir = "/home/you/myproject",
+  host = "control-node",
+  request_tty = TRUE # ssh -tt: remote R gets SIGHUP when the ssh client dies
+)
+```
+
+The trade-off is that `-tt` merges and alters worker stdout-stderr capture, so it is off by default.
+
+One boundary to keep in mind: neither SSH nor `crew` reaps **child processes the worker spawns**, such as a `docker run` container.
+If a task launches one, the task code must tear it down itself (for example `docker run --rm` plus stopping the container when the R worker exits).
+
+## Security notes
+
+- **Keys are never handled by the package.**
+  It uses your system `ssh` (keys in `~/.ssh`, `ssh-agent`, `~/.ssh/config`).
+  Protect keys as usual: a passphrase plus an agent, correct file permissions, and per-user keys.
+- **`BatchMode=yes`** (a default ssh option) means no password prompts and fail-fast behaviour; combined with a populated `known_hosts` it also prevents silent host-key changes.
+- **The dial-back channel** carries serialized R objects.
+  On anything less than a fully trusted network, encrypt it by passing `tls = crew::crew_tls(mode = "automatic")` to `crew_controller_ssh()`.
+- **Command-line exposure.**
+  The worker launch command (which includes the dispatcher URL and any TLS token) is briefly visible in the remote process list (`ps`).
+  This is not your private key, but is worth knowing on a shared node.
+
+## Testing on a real cluster
+
+The package's SSH tests are dormant by default (so `R CMD check` and CI never touch a cluster) and are configured entirely through the environment - no hostnames are hard-coded.
+
+A gated multi-node test (`tests/testthat/test-integration-cluster.R`) confirms that work actually spreads across more than one node.
+Enable it by setting:
+
+```sh
+export CREW_SSH_TEST_NODES="host1=2,host2=2"   # host = per-node cap
+export CREW_SSH_TEST_PROJDIR="/path/to/project" # shared/identical path on the nodes
+export CREW_SSH_TEST_HOST="control-node"        # reachable from the worker nodes
+# optional: export CREW_SSH_TEST_RSCRIPT="/opt/R/4.6.0/bin/Rscript"
+```
+
+then run the test suite on the control node.
+
+For the fault-injection / orphan exercise (kill a worker mid-run, then check for lingering remote processes), use the manual soak script, which reads the same variables:
+
+```sh
+Rscript -e 'source(system.file("soak/run_soak.R", package = "crew.ssh"))'
+```
+
+See `inst/soak/README.md` for what to look for.
+The single-machine loopback test (`tests/testthat/test-integration-loopback.R`) is separate and enabled with `CREW_SSH_TEST_INTEGRATION` plus working passwordless `ssh localhost`.
