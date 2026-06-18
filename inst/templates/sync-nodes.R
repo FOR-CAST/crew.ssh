@@ -80,7 +80,7 @@ remote_script <- sprintf(
     "set -e",
     "cd %s",
     "echo '[git] fetch + fast-forward %s'",
-    "git fetch --quiet origin",
+    "git fetch --quiet origin %s",
     "git checkout --quiet %s",
     "git merge --ff-only --quiet origin/%s",
     "echo '[git] submodules'",
@@ -93,6 +93,7 @@ remote_script <- sprintf(
     sep = "\n"
   ),
   shQuote(projdir),
+  branch,
   branch,
   branch,
   branch,
