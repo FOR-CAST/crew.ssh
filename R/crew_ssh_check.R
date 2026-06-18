@@ -12,13 +12,13 @@ ssh_probe_expr <- paste(
 )
 
 ## Build the ssh args for the Rscript probe on one node:
-##   c(<ssh options>, <host>, "cd <projdir> && <rscript> -e '<probe>' --args <pkgs>")
-## Pure + testable. Internal.
+##   c(<ssh options>, <host>, "cd <projdir> && <rscript> -e '<probe>' <pkgs>")
+## Package names are passed as trailing args and read via commandArgs(trailingOnly
+## = TRUE); Rscript supplies its own `--args` separator, so we must NOT add one
+## (doing so leaks a bogus "--args" entry into the probe). Pure + testable.
+## Internal.
 build_probe_args <- function(spec, packages = character()) {
-  command <- c(shQuote(spec$rscript), "-e", shQuote(ssh_probe_expr))
-  if (length(packages)) {
-    command <- c(command, "--args", packages)
-  }
+  command <- c(shQuote(spec$rscript), "-e", shQuote(ssh_probe_expr), packages)
   remote <- sprintf("cd %s && %s", shQuote(spec$projdir), paste(command, collapse = " "))
   c(spec$ssh_options, spec$host, remote)
 }

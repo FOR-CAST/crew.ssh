@@ -1,4 +1,4 @@
-test_that("build_probe_args builds the remote probe command", {
+test_that("build_probe_args appends packages as trailing args (no --args)", {
   spec <- crew_ssh_node(
     "a",
     1L,
@@ -8,13 +8,14 @@ test_that("build_probe_args builds the remote probe command", {
   )
   args <- build_probe_args(spec, packages = c("crew", "foo"))
   expect_identical(args[1:3], c("-o", "BatchMode=yes", "a"))
-  expect_match(args[[4]], "^cd '/p' && 'Rscript' -e '.*' --args crew foo$")
+  expect_match(args[[4]], "^cd '/p' && 'Rscript' -e '.*' crew foo$")
+  expect_no_match(args[[4]], "--args") # Rscript supplies its own
 })
 
-test_that("build_probe_args omits --args when no packages", {
+test_that("build_probe_args omits packages when none given", {
   spec <- crew_ssh_node("a", 1L, rscript = "Rscript", projdir = "/p", ssh_options = NULL)
   args <- build_probe_args(spec)
-  expect_no_match(args[[length(args)]], "--args")
+  expect_match(args[[length(args)]], "^cd '/p' && 'Rscript' -e '.*'$")
 })
 
 test_that("crew_ssh_check reports OK for a reachable localhost", {
