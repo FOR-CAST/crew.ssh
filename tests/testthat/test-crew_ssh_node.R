@@ -57,14 +57,10 @@ test_that("normalize_nodes keeps per-node overrides", {
   expect_identical(nodes$b$rscript, "Rscript")
 })
 
-test_that("normalize_nodes errors on unnamed vector, missing projdir, dup hosts", {
+test_that("normalize_nodes errors on unnamed vector and duplicate hosts", {
   expect_snapshot(
     error = TRUE,
     normalize_nodes(c(45L), rscript = "R", projdir = "/p", ssh_options = NULL)
-  )
-  expect_snapshot(
-    error = TRUE,
-    normalize_nodes(c(a = 1L), rscript = "R", projdir = NULL, ssh_options = NULL)
   )
   expect_snapshot(
     error = TRUE,
@@ -75,4 +71,16 @@ test_that("normalize_nodes errors on unnamed vector, missing projdir, dup hosts"
       ssh_options = NULL
     )
   )
+})
+
+test_that("normalize_nodes errors on an empty-string projdir", {
+  expect_snapshot(
+    error = TRUE,
+    normalize_nodes(c(a = 1L), rscript = "R", projdir = "", ssh_options = NULL)
+  )
+})
+
+test_that("normalize_nodes allows a NULL projdir (for node-stat callers)", {
+  nodes <- normalize_nodes(c(a = 1L), rscript = "R", projdir = NULL, ssh_options = NULL)
+  expect_null(nodes$a$projdir)
 })

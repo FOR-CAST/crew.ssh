@@ -221,6 +221,7 @@ controller <- crew_controller_ssh(
 Other ssh:
 \code{\link{crew_class_launcher_ssh}},
 \code{\link[=crew_ssh_check]{crew_ssh_check()}},
+\code{\link[=crew_ssh_monitor]{crew_ssh_monitor()}},
 \code{\link[=crew_ssh_node]{crew_ssh_node()}}
 }
 \concept{ssh}

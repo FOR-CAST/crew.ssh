@@ -41,6 +41,7 @@ crew_ssh_node("host2", workers = 45L, rscript = "/opt/R/4.6.0/bin/Rscript")
 Other ssh:
 \code{\link{crew_class_launcher_ssh}},
 \code{\link[=crew_controller_ssh]{crew_controller_ssh()}},
-\code{\link[=crew_ssh_check]{crew_ssh_check()}}
+\code{\link[=crew_ssh_check]{crew_ssh_check()}},
+\code{\link[=crew_ssh_monitor]{crew_ssh_monitor()}}
 }
 \concept{ssh}

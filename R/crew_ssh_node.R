@@ -59,7 +59,7 @@ resolve_rscript <- function(rscript, homogeneous) {
 ## crew_ssh_node objects) into a named list of fully-resolved specs: apply the
 ## controller-level rscript/projdir/ssh_options defaults (resolving a NULL
 ## rscript via `homogeneous`), validate, and key the list by host. Internal.
-normalize_nodes <- function(nodes, rscript, projdir, ssh_options, homogeneous = TRUE) {
+normalize_nodes <- function(nodes, rscript, projdir = NULL, ssh_options, homogeneous = TRUE) {
   if (is.numeric(nodes)) {
     nms <- names(nodes)
     if (is.null(nms) || any(!nzchar(nms))) {
@@ -85,8 +85,15 @@ normalize_nodes <- function(nodes, rscript, projdir, ssh_options, homogeneous = 
     n$rscript <- resolve_rscript(n$rscript %||% rscript, homogeneous)
     n$projdir <- n$projdir %||% projdir
     n$ssh_options <- n$ssh_options %||% ssh_options
+    ## `projdir` is required by callers that run code on the node (e.g.
+    ## crew_controller_ssh(), crew_ssh_check()) but irrelevant to ones that only
+    ## read system stats (crew_ssh_monitor()); validate it only when supplied.
     if (
-      !is.character(n$projdir) || length(n$projdir) != 1L || is.na(n$projdir) || !nzchar(n$projdir)
+      !is.null(n$projdir) &&
+        (!is.character(n$projdir) ||
+          length(n$projdir) != 1L ||
+          is.na(n$projdir) ||
+          !nzchar(n$projdir))
     ) {
       stop(
         "`projdir` must be supplied (per node or via the controller) as a ",

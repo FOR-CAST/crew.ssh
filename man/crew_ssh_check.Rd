@@ -72,6 +72,7 @@ crew_ssh_check(
 Other ssh:
 \code{\link{crew_class_launcher_ssh}},
 \code{\link[=crew_controller_ssh]{crew_controller_ssh()}},
+\code{\link[=crew_ssh_monitor]{crew_ssh_monitor()}},
 \code{\link[=crew_ssh_node]{crew_ssh_node()}}
 }
 \concept{ssh}
