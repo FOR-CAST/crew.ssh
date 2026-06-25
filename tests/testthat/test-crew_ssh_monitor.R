@@ -36,6 +36,29 @@ test_that("parse_monitor_line flags malformed or empty output as not ok", {
   expect_false(parse_monitor_line("x y z 0.1 4", "h")$ok)
 })
 
+test_that("monitor_render degrades bad results to 'unreachable' without erroring", {
+  skip_if_not_installed("htmltools")
+  ## ok row, an ok = FALSE row, and a malformed (atomic) element from a failed
+  ## poll -- none of these should error
+  results <- list(
+    list(
+      host = "good",
+      ok = TRUE,
+      cpu = 10,
+      mem_used_kb = 1,
+      mem_total_kb = 2,
+      load1 = 0.5,
+      ncpu = 8
+    ),
+    list(host = "down", ok = FALSE),
+    "Error : something blew up"
+  )
+  html <- as.character(crew.ssh:::monitor_render(results))
+  expect_match(html, "good")
+  expect_match(html, "down")
+  expect_match(html, "unreachable")
+})
+
 test_that("crew_ssh_monitor validates nodes before opening a gadget", {
   expect_snapshot(error = TRUE, crew_ssh_monitor(nodes = c(1L, 2L)))
 })

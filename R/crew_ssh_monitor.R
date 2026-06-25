@@ -68,30 +68,56 @@ parse_monitor_line <- function(stdout, host) {
   )
 }
 
-## Poll a single node, never throwing (a failed/timed-out ssh becomes
-## ok = FALSE). Internal.
-monitor_poll_one <- function(spec, timeout) {
-  res <- run_ssh(build_monitor_args(spec), timeout)
-  if (!identical(res$status, 0L) || !nzchar(trimws(res$stdout))) {
+## Collect one finished ssh job into a result list, never throwing. A job that
+## failed to launch, is still running (timed out), exited non-zero, or returned
+## malformed output becomes ok = FALSE. Internal.
+collect_poll <- function(job) {
+  on.exit(unlink(job$outfile), add = TRUE)
+  spec <- job$spec
+  if (is.null(job$proc)) {
     return(list(host = spec$host, ok = FALSE))
   }
-  parse_monitor_line(res$stdout, spec$host)
-}
-
-## Map a function over node specs, in parallel where supported (one forked ssh
-## per host, so a tick costs ~one round-trip rather than N). Internal.
-poll_map <- function(specs, fun) {
-  if (.Platform$OS.type != "windows" && length(specs) > 1L) {
-    cores <- min(length(specs), max(1L, parallel::detectCores()))
-    parallel::mclapply(specs, fun, mc.cores = cores)
-  } else {
-    lapply(specs, fun)
+  if (job$proc$is_alive()) {
+    try(job$proc$kill(), silent = TRUE)
+    return(list(host = spec$host, ok = FALSE))
   }
+  out <- tryCatch(
+    if (file.exists(job$outfile)) {
+      paste(readLines(job$outfile, warn = FALSE), collapse = "\n")
+    } else {
+      ""
+    },
+    error = function(e) ""
+  )
+  if (!identical(job$proc$get_exit_status(), 0L) || !nzchar(trimws(out))) {
+    return(list(host = spec$host, ok = FALSE))
+  }
+  parse_monitor_line(out, spec$host)
 }
 
-## Poll all nodes once. Internal.
+## Poll all nodes once. Launches one ssh child process per node *concurrently*
+## (via processx, NOT by forking the R session -- forking from inside the
+## running Shiny/httpuv gadget is unsafe and intermittently corrupts the
+## workers), waits up to `timeout` for them to finish, kills any stragglers,
+## then collects. Always returns a list of well-formed result lists. Internal.
 monitor_poll <- function(specs, timeout) {
-  poll_map(specs, function(spec) monitor_poll_one(spec, timeout))
+  jobs <- lapply(specs, function(spec) {
+    outfile <- tempfile("crew-ssh-mon-")
+    proc <- tryCatch(
+      processx::process$new("ssh", build_monitor_args(spec), stdout = outfile, stderr = NULL),
+      error = function(e) NULL
+    )
+    list(spec = spec, proc = proc, outfile = outfile)
+  })
+  deadline <- Sys.time() + timeout
+  repeat {
+    alive <- vapply(jobs, function(job) !is.null(job$proc) && job$proc$is_alive(), logical(1))
+    if (!any(alive) || Sys.time() >= deadline) {
+      break
+    }
+    Sys.sleep(0.05)
+  }
+  lapply(jobs, collect_poll)
 }
 
 ## Close any persistent SSH master connections opened by the monitor. Internal.
@@ -140,12 +166,19 @@ monitor_render <- function(results) {
   }
   td <- function(...) htmltools::tags$td(..., style = "padding:5px 10px;vertical-align:middle;")
 
+  unreachable_row <- function(host) {
+    htmltools::tags$tr(
+      td(htmltools::strong(host)),
+      htmltools::tags$td("unreachable", colspan = "4", style = "padding:5px 10px;color:#d9534f;")
+    )
+  }
+
   rows <- lapply(results, function(r) {
-    if (!isTRUE(r$ok)) {
-      return(htmltools::tags$tr(
-        td(htmltools::strong(r$host)),
-        htmltools::tags$td("unreachable", colspan = "4", style = "padding:5px 10px;color:#d9534f;")
-      ))
+    ## guard against a malformed element (e.g. an errored poll) so a single bad
+    ## tick degrades to "unreachable" instead of crashing the gadget
+    if (!is.list(r) || !isTRUE(r$ok)) {
+      host <- if (is.list(r) && length(r$host) == 1L) r$host else "?"
+      return(unreachable_row(host))
     }
     gu <- round(r$mem_used_kb / 1048576)
     gt <- round(r$mem_total_kb / 1048576)
@@ -271,7 +304,13 @@ crew_ssh_monitor <- function(
     tick <- shiny::reactiveTimer(interval * 1000)
     output$tbl <- shiny::renderUI({
       tick()
-      monitor_render(monitor_poll(specs, timeout))
+      ## never let one bad tick tear down a long-running gadget
+      tryCatch(monitor_render(monitor_poll(specs, timeout)), error = function(e) {
+        htmltools::div(
+          style = "color:#d9534f;font-family:monospace;",
+          paste("poll error:", conditionMessage(e))
+        )
+      })
     })
     shiny::observeEvent(input$done, shiny::stopApp())
     session$onSessionEnded(function() monitor_close_connections(specs))

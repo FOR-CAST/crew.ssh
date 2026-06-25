@@ -1,3 +1,7 @@
+# crew.ssh 0.0.2
+
+* `crew_ssh_monitor()` no longer crashes during long sessions: it polls nodes with concurrent `processx` child processes instead of forking the R session with `parallel::mclapply()` (forking from inside the running Shiny gadget is unsafe and intermittently errored on every node), and the renderer now degrades a failed poll to "unreachable" rather than erroring.
+
 # crew.ssh 0.0.1
 
 * `crew_ssh_monitor()` opens a live CPU and memory dashboard (a `miniUI` gadget, rendered in the Viewer pane) that polls each Linux node over SSH on a timer, so a running cluster can be watched in one window instead of an `htop` per machine; a no-dependency Bash equivalent is bundled at `system.file("templates/cluster-monitor.sh", package = "crew.ssh")`.
