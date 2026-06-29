@@ -110,9 +110,21 @@ change), and supports `--dry-run`. Run it from the project root on the control
 node (after pushing, so the nodes can fetch):
 
 ```sh
-Rscript scripts/sync-nodes.R --dry-run   # preview the remote script
-Rscript scripts/sync-nodes.R             # apply
+Rscript scripts/sync-nodes.R --dry-run   # preview the plan + remote script
+Rscript scripts/sync-nodes.R             # apply (parallel)
+Rscript scripts/sync-nodes.R --force     # fan a group out even if its warm node failed
 ```
+
+Nodes are provisioned **in parallel**. When `RENV_PATHS_CACHE` is on a shared
+(networked) filesystem, nodes that share an OS *codename* share one set of compiled
+packages (renv keys its cache by codename). To avoid every node compiling the same
+missing packages at once, sync groups nodes by codename and, per group, restores
+the **first** node (in `_hosts.R` order) first to warm the shared cache, then fans
+the rest of the group out in parallel to link it. Distinct codename groups warm
+concurrently. The control node is preflighted too: a group whose codename matches
+the control node is assumed already warmed by the control node's own library, so it
+skips the warm step and fans out immediately. No extra configuration is needed --
+the warm node per group is chosen automatically from `crew.ssh.nodes`.
 
 Each node needs git access to any private submodules, the project at
 `crew.ssh.projdir`, and a per-node `renv` library (do not share an renv *library*

@@ -9,7 +9,7 @@ Description: An experimental 'crew' (<https://wlandau.github.io/crew/>) launcher
     controller. This is a lightweight counterpart to 'crew.cluster' (which
     targets traditional high-performance-computing schedulers) for ad-hoc SSH
     clusters. The package is experimental and currently private / unpublished.
-Version: 0.0.2
+Version: 0.0.3
 Authors@R:
     person("Alex M", "Chubaty", email = "achubaty@for-cast.ca",
            role = c("aut", "cre"), comment = c(ORCID = "0000-0001-7146-8135"))

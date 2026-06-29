@@ -1,3 +1,7 @@
+# crew.ssh 0.0.3
+
+* The bundled `sync-nodes.R` template now provisions nodes **in parallel** (base `parallel::mclapply`, one fork per node) instead of one at a time. To keep a shared (networked) renv cache from being recompiled by every node at once, it preflights each node's OS codename, groups nodes by codename, restores the first node of each group first to warm the shared cache, then fans the rest of the group out in parallel to link it. Distinct codename groups warm concurrently. The control node is preflighted too: a group whose codename matches the control node skips the warm step (its cache is assumed already populated by the control node's own library) and fans out immediately. New `--force` flag fans a group out even if its warm node failed.
+
 # crew.ssh 0.0.2
 
 * `crew_ssh_monitor()` no longer crashes during long sessions: it polls nodes with concurrent `processx` child processes instead of forking the R session with `parallel::mclapply()` (forking from inside the running Shiny gadget is unsafe and intermittently errored on every node), and the renderer now degrades a failed poll to "unreachable" rather than erroring.
