@@ -1,3 +1,7 @@
+# crew.ssh 0.0.4
+
+* The bundled `sync-nodes.R` template now runs `git submodule sync` before `git submodule update` on each node, so a change to a submodule's URL in `.gitmodules` (e.g. repointing to a fork) is picked up. Without it, `git submodule update` kept using each node's previously-configured remote and failed to fetch the new pinned commit.
+
 # crew.ssh 0.0.3
 
 * The bundled `sync-nodes.R` template now provisions nodes **in parallel** (base `parallel::mclapply`, one fork per node) instead of one at a time. To keep a shared (networked) renv cache from being recompiled by every node at once, it preflights each node's OS codename, groups nodes by codename, restores the first node of each group first to warm the shared cache, then fans the rest of the group out in parallel to link it. Distinct codename groups warm concurrently. The control node is preflighted too: a group whose codename matches the control node skips the warm step (its cache is assumed already populated by the control node's own library) and fans out immediately. New `--force` flag fans a group out even if its warm node failed.
