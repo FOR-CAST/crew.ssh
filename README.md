@@ -4,9 +4,7 @@
 
 > **Experimental and private.**
 > This package is **experimental**: the user-facing API may change without
-> notice and it has not been hardened for production use. It is currently
-> **private / unpublished** and intended for internal use only. Do not publish
-> or redistribute without sign-off.
+> notice and it has not been hardened for production use.
 
 A [`crew`](https://wlandau.github.io/crew/) launcher plugin that runs workers on
 remote machines over **SSH**, so a [`targets`](https://docs.ropensci.org/targets/)
