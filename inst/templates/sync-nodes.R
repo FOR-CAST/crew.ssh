@@ -10,8 +10,9 @@
 ## submodules) and renv.
 ##
 ## Per node, over SSH: fast-forward the configured git branch, update submodules,
-## (re)create the configured symlinks, and renv::restore(). Non-destructive
-## (reports FAILED rather than resetting); supports --dry-run.
+## (re)create the configured symlinks, renv::restore() the default profile, then
+## restore any extra renv profiles listed in `crew.ssh.renv_profiles`.
+## Non-destructive (reports FAILED rather than resetting); supports --dry-run.
 ##
 ## PARALLELISM + the renv cache. When RENV_PATHS_CACHE is on a shared (networked)
 ## filesystem, all nodes that share an OS *codename* also share one set of compiled
@@ -30,7 +31,8 @@
 ## control node is assumed already warmed by the control node's own renv library
 ## (it shares the same cache subtree), so those workers skip the warm step and fan
 ## out immediately. If that cache is in fact incomplete, those nodes simply compile
-## in parallel -- no worse than a cold run.
+## in parallel -- no worse than a cold run. That assumption covers only the libraries
+## the control node has restored: restore any `crew.ssh.renv_profiles` there first.
 ##
 ## Run from the PROJECT ROOT with the project's R (renv + jsonlite available):
 ##   Rscript scripts/sync-nodes.R            # do it
@@ -97,6 +99,52 @@ link_cmds <- if (length(symlinks)) {
   "true"
 }
 
+## extra renv profiles to restore on each node after the default one: character
+## vector of profile names, e.g. "landr". Optional (NULL -> default profile only).
+## Each node restores from renv/profiles/<profile>/renv.lock in its fast-forwarded
+## checkout, so the lockfile must be committed and pushed; this script only checks
+## that it exists here. RENV_PROFILE is set before R starts, so renv/activate.R
+## (sourced by the project .Rprofile) activates that profile rather than the default.
+renv_profiles <- getOption("crew.ssh.renv_profiles")
+if (length(renv_profiles)) {
+  ## "default" is renv's name for the root profile, and "." / ".." would resolve
+  ## the lockfile path outside renv/profiles/
+  if (
+    !is.character(renv_profiles) ||
+      !all(grepl("^[A-Za-z0-9._-]+$", renv_profiles)) ||
+      any(renv_profiles %in% c("default", ".", ".."))
+  ) {
+    stop(
+      "crew.ssh.renv_profiles must be profile names (letters, digits, '.', '_', '-'), ",
+      "other than 'default', '.' and '..'",
+      call. = FALSE
+    )
+  }
+  missing_lock <- renv_profiles[
+    !file.exists(file.path("renv", "profiles", renv_profiles, "renv.lock"))
+  ]
+  if (length(missing_lock)) {
+    stop(
+      "no renv/profiles/<profile>/renv.lock for crew.ssh.renv_profiles: ",
+      paste(missing_lock, collapse = ", "),
+      call. = FALSE
+    )
+  }
+}
+profile_cmds <- if (length(renv_profiles)) {
+  paste(
+    sprintf(
+      "echo '[renv] restore profile %s'\nRENV_PROFILE=%s %s -e 'renv::restore(prompt = FALSE)'",
+      renv_profiles,
+      renv_profiles,
+      rscript
+    ),
+    collapse = "\n"
+  )
+} else {
+  "true"
+}
+
 remote_script <- sprintf(
   paste(
     "set -e",
@@ -112,6 +160,7 @@ remote_script <- sprintf(
     "%s",
     "echo '[renv] restore (R %s)'",
     "%s -e 'renv::restore(prompt = FALSE)'",
+    "%s",
     "echo '[done]'",
     sep = "\n"
   ),
@@ -122,7 +171,8 @@ remote_script <- sprintf(
   branch,
   link_cmds,
   sub("^Rscript-?", "", rscript),
-  rscript
+  rscript,
+  profile_cmds
 )
 
 ssh_opts <- c("-o", "BatchMode=yes", "-o", "ConnectTimeout=10")
@@ -201,6 +251,9 @@ emit <- function(r) {
 
 cat(sprintf("Syncing %d node(s): %s\n", length(hosts), paste(hosts, collapse = ", ")))
 cat(sprintf("Branch: %s | remote Rscript: %s\n", branch, rscript))
+if (length(renv_profiles)) {
+  cat(sprintf("Extra renv profiles: %s\n", paste(renv_profiles, collapse = ", ")))
+}
 cat("\n[preflight] resolving OS codenames (read-only SSH) ...\n")
 
 control_codename <- host_codename(NULL)

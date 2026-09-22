@@ -1,3 +1,7 @@
+# crew.ssh 0.0.5
+
+* The bundled `sync-nodes.R` template restores the renv profiles listed in the new `crew.ssh.renv_profiles` option on each node, after the default profile (`RENV_PROFILE=<profile> <rscript> -e 'renv::restore(prompt = FALSE)'`, from `renv/profiles/<profile>/renv.lock` in the node's fast-forwarded checkout, so that lockfile must be committed and pushed). Before this, only the default profile was restored, so a profile that workers use (e.g. a separate library for one kind of task) was never updated on the nodes. The script stops before contacting any node if a listed name is not a plain profile name (`default`, `.` and `..` are rejected) or has no `renv/profiles/<profile>/renv.lock` in the project root.
+
 # crew.ssh 0.0.4
 
 * The bundled `sync-nodes.R` template now runs `git submodule sync` before `git submodule update` on each node, so a change to a submodule's URL in `.gitmodules` (e.g. repointing to a fork) is picked up. Without it, `git submodule update` kept using each node's previously-configured remote and failed to fetch the new pinned commit.

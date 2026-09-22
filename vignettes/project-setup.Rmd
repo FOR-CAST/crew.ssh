@@ -79,6 +79,8 @@ options(
   # crew.ssh.port = 5555L,           # FIXED dial-back port (open it in the firewall)
   # optional: override the remote Rscript (default tracks the renv.lock R version):
   # crew.ssh.rscript = "Rscript-4.6.0"
+  # optional: extra renv profiles sync-nodes restores after the default one:
+  # crew.ssh.renv_profiles = c("myprofile")
 )
 ```
 
@@ -104,7 +106,12 @@ file.copy(
 It reads `_hosts.R` and, for each node over SSH: fast-forwards `crew.ssh.branch`,
 updates git submodules, (re)creates `crew.ssh.symlinks`, and runs
 `renv::restore()` (which installs/updates whatever `renv.lock` specifies, including
-crew.ssh once recorded). It is non-destructive (reports FAILED rather than
+crew.ssh once recorded). If the project keeps other renv profiles that workers
+use (e.g. a separate library for one kind of task), list them in
+`crew.ssh.renv_profiles`: each is restored after the default profile from
+`renv/profiles/<profile>/renv.lock` in the node's checkout, so commit and push that
+lockfile. The script stops before contacting any node if one of those lockfiles is
+missing from the project root. It is non-destructive (reports FAILED rather than
 resetting), reads the R version from `renv.lock` (so an R upgrade is a one-line
 change), and supports `--dry-run`. Run it from the project root on the control
 node (after pushing, so the nodes can fetch):
