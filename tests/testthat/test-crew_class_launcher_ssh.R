@@ -94,3 +94,51 @@ test_that("the launcher subclasses crew_class_launcher and places by capacity", 
   picks <- vapply(seq_len(4L), function(i) pick_node(), character(1L))
   expect_identical(sort(picks), c("a", "b", "b", "b"))
 })
+
+## Worker stdout/stderr is the only record of why a worker died: the ssh client
+## forwards the remote R's output, and ssh's own "Timeout, server not
+## responding" goes to the same stream. Discarding it makes a lost worker
+## undiagnosable, which is what happened before these tests existed.
+ssh_controller <- function(...) {
+  crew_controller_ssh(nodes = c(a = 1L), projdir = "/proj", host = "127.0.0.1", ...)
+}
+
+test_that("log paths are NULL when no log directory is configured", {
+  controller <- ssh_controller()
+  on.exit(try(controller$terminate(), silent = TRUE), add = TRUE)
+  private <- controller$launcher$.__enclos_env__$private
+  expect_null(private$.log_path("stdout", "worker1"))
+  expect_null(private$.log_path("stderr", "worker1"))
+})
+
+test_that("log paths are per-worker files under the configured directory", {
+  dir <- tempfile("crew_ssh_logs_")
+  joined <- ssh_controller(log_directory = dir)
+  on.exit(try(joined$terminate(), silent = TRUE), add = TRUE)
+  private <- joined$launcher$.__enclos_env__$private
+  expect_identical(private$.log_path("stdout", "w1"), file.path(dir, "w1.log"))
+  ## joined by default, so stderr is merged into the stdout file
+  expect_identical(private$.log_path("stderr", "w1"), "2>&1")
+
+  split <- ssh_controller(log_directory = dir, log_join = FALSE)
+  on.exit(try(split$terminate(), silent = TRUE), add = TRUE)
+  private_split <- split$launcher$.__enclos_env__$private
+  expect_identical(private_split$.log_path("stdout", "w1"), file.path(dir, "w1-stdout.log"))
+  expect_identical(private_split$.log_path("stderr", "w1"), file.path(dir, "w1-stderr.log"))
+})
+
+test_that("log_prepare creates the log directory", {
+  root <- tempfile("crew_ssh_logs_")
+  dir <- file.path(root, "nested")
+  controller <- ssh_controller(log_directory = dir)
+  on.exit(
+    {
+      try(controller$terminate(), silent = TRUE)
+      unlink(root, recursive = TRUE)
+    },
+    add = TRUE
+  )
+  expect_false(dir.exists(dir))
+  controller$launcher$.__enclos_env__$private$.log_prepare()
+  expect_true(dir.exists(dir))
+})

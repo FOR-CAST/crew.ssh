@@ -72,6 +72,12 @@ R is killed when the local ssh client is. Set by \code{\link[=crew_controller_ss
     \item{\code{tunnel}}{Logical; if \code{TRUE}, the worker dials the dispatcher back
 through an SSH reverse tunnel (no inbound port needed). Requires the
 dispatcher on \verb{127.0.0.1}. Set by \code{\link[=crew_controller_ssh]{crew_controller_ssh()}}.}
+
+    \item{\code{log_directory}}{Directory for per-worker log files, or \code{NULL} to
+discard worker output. Set by \code{\link[=crew_controller_ssh]{crew_controller_ssh()}}.}
+
+    \item{\code{log_join}}{Logical; if \code{TRUE}, a worker's standard error is merged
+into its single log file. Set by \code{\link[=crew_controller_ssh]{crew_controller_ssh()}}.}
   }
   \if{html}{\out{</div>}}
 }

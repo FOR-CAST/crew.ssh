@@ -42,7 +42,15 @@
 #'   how a `NULL` `rscript` is resolved. Set `FALSE` for mixed installs (then the
 #'   remote `PATH` must provide `Rscript`, or set `rscript` per node).
 #' @param ssh_options Character vector of options passed to the `ssh` client
-#'   before the host (for example `c("-o", "BatchMode=yes")`).
+#'   before the host (for example `c("-o", "BatchMode=yes")`). Each function's
+#'   own default differs; see its usage.
+#' @param log_directory Directory for per-worker log files, or `NULL` (the
+#'   default) to discard worker output. Each worker's `ssh` client writes the
+#'   remote R process's output here, along with `ssh`'s own diagnostics, which is
+#'   the only record of why a worker died. Set it for any long run.
+#' @param log_join Logical: if `TRUE` (default), a worker's standard error is
+#'   merged into its single log file; if `FALSE`, the two streams are written to
+#'   separate `-stdout` / `-stderr` files.
 #' @param request_tty Logical: if `TRUE`, launch with `ssh -tt` (force a remote
 #'   pseudo-tty) so the remote R is sent `SIGHUP` and exits when the local `ssh`
 #'   client is killed. Useful for prompt teardown on hard kills, at the cost of
@@ -65,6 +73,25 @@
 #' @return A `crew` controller object (see [crew::crew_controller_local()]),
 #'   ready to pass to `targets::tar_option_set(controller = ...)` or to combine
 #'   in a [crew::crew_controller_group()].
+#' @section Connection keepalive:
+#' The default `ssh_options` set `ServerAliveInterval` and `ServerAliveCountMax`
+#' together, and both matter. A worker whose `ssh` client gives up loses its
+#' connection to the dispatcher, `mirai`'s `autoexit` then terminates the
+#' worker, and whatever it was computing restarts from the beginning. With only
+#' the interval set, OpenSSH's default `ServerAliveCountMax` of 3 tears the
+#' connection down after 90 seconds of silence -- and since a stall on the
+#' control node affects every connection at once, one brief hiccup can destroy
+#' every worker on every node simultaneously. The default here tolerates 10
+#' minutes, on the reasoning that waiting longer on a genuinely dead node costs
+#' only the wait, while abandoning a live one costs all of its work so far.
+#'
+#' These are passed as `ssh -o`, which takes precedence over `~/.ssh/config` and
+#' `/etc/ssh/ssh_config` for those two keys only; every other setting for the
+#' host (`Hostname`, `Port`, `User`, `IdentityFile`, `ProxyJump` and so on) still
+#' comes from those files. Note that supplying `ssh_options` REPLACES this
+#' default vector rather than adding to it, so a caller who sets it takes on
+#' responsibility for the keepalive settings too.
+#'
 #' @family ssh
 #' @export
 #' @examples
@@ -83,9 +110,18 @@ crew_controller_ssh <- function(
   name = "ssh",
   rscript = NULL,
   homogeneous = TRUE,
-  ssh_options = c("-o", "BatchMode=yes", "-o", "ServerAliveInterval=30"),
+  ssh_options = c(
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ServerAliveInterval=30",
+    "-o",
+    "ServerAliveCountMax=20"
+  ),
   request_tty = FALSE,
   tunnel = FALSE,
+  log_directory = NULL,
+  log_join = TRUE,
   host = NULL,
   port = NULL,
   tls = crew::crew_tls(),
@@ -151,6 +187,8 @@ crew_controller_ssh <- function(
   launcher$caps <- caps
   launcher$request_tty <- request_tty
   launcher$tunnel <- tunnel
+  launcher$log_directory <- log_directory
+  launcher$log_join <- log_join
   controller <- crew::crew_controller(
     client = client,
     launcher = launcher,

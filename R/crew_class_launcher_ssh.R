@@ -111,6 +111,12 @@ crew_class_launcher_ssh <- R6Class(
     #'   through an SSH reverse tunnel (no inbound port needed). Requires the
     #'   dispatcher on `127.0.0.1`. Set by [crew_controller_ssh()].
     tunnel = FALSE,
+    #' @field log_directory Directory for per-worker log files, or `NULL` to
+    #'   discard worker output. Set by [crew_controller_ssh()].
+    log_directory = NULL,
+    #' @field log_join Logical; if `TRUE`, a worker's standard error is merged
+    #'   into its single log file. Set by [crew_controller_ssh()].
+    log_join = TRUE,
     #' @description Launch one worker as a remote R process over SSH.
     #' @param call Character string with the `crew::crew_worker()` call to run on
     #'   the worker (supplied by `crew`).
@@ -119,9 +125,7 @@ crew_class_launcher_ssh <- R6Class(
       host <- private$.pick_node()
       spec <- self$nodes[[host]]
       name <- crew::crew_random_name()
-      if (is.function(private$.log_prepare)) {
-        private$.log_prepare()
-      }
+      private$.log_prepare()
       tunnel <- NULL
       if (isTRUE(self$tunnel)) {
         dport <- dispatcher_port(call)
@@ -169,16 +173,32 @@ crew_class_launcher_ssh <- R6Class(
       private$.assigned[host] <- private$.assigned[host] + 1L
       host
     },
-    ## Reuse crew's inherited per-worker log helpers when present (they capture
-    ## the ssh client's stdout/stderr, which forwards the remote worker output);
-    ## fall back to discarding output if a future crew version renames them.
-    .log_path = function(which, name) {
-      fn <- private[[paste0(".log_", which)]]
-      if (is.function(fn)) {
-        fn(name = name)
-      } else {
-        NULL
+    ## Per-worker log capture. crew defines these helpers only on its LOCAL
+    ## launcher (they read its `options_local`), and this class inherits from the
+    ## base `crew_class_launcher`, so there is nothing to inherit and they are
+    ## implemented here. Capturing the local ssh client's streams is what records
+    ## the remote worker's output AND ssh's own diagnostics -- notably
+    ## "Timeout, server ... not responding", the one trace a worker killed by a
+    ## dropped connection leaves behind.
+    .log_prepare = function() {
+      if (!is.null(self$log_directory)) {
+        dir.create(self$log_directory, recursive = TRUE, showWarnings = FALSE)
       }
+      invisible(NULL)
+    },
+    .log_path = function(which, name) {
+      if (is.null(self$log_directory)) {
+        return(NULL)
+      }
+      if (identical(which, "stderr")) {
+        ## processx merges stderr into stdout when told "2>&1"
+        if (isTRUE(self$log_join)) {
+          return("2>&1")
+        }
+        return(path.expand(file.path(self$log_directory, paste0(name, "-stderr.log"))))
+      }
+      suffix <- if (isTRUE(self$log_join)) "" else "-stdout"
+      path.expand(file.path(self$log_directory, paste0(name, suffix, ".log")))
     }
   )
 )

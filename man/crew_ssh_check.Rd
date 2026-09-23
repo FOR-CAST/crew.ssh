@@ -40,7 +40,8 @@ how a \code{NULL} \code{rscript} is resolved. Set \code{FALSE} for mixed install
 remote \code{PATH} must provide \code{Rscript}, or set \code{rscript} per node).}
 
 \item{ssh_options}{Character vector of options passed to the \code{ssh} client
-before the host (for example \code{c("-o", "BatchMode=yes")}).}
+before the host (for example \code{c("-o", "BatchMode=yes")}). Each function's
+own default differs; see its usage.}
 
 \item{packages}{Character vector of package names whose availability to check
 on each node (default \code{"crew"}, which every worker needs).}

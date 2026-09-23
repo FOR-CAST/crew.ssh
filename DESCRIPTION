@@ -9,7 +9,7 @@ Description: An experimental 'crew' (<https://wlandau.github.io/crew/>) launcher
     controller. This is a lightweight counterpart to 'crew.cluster' (which
     targets traditional high-performance-computing schedulers) for ad-hoc SSH
     clusters. The package is experimental and currently private / unpublished.
-Version: 0.0.5
+Version: 0.0.6
 Authors@R:
     person("Alex M", "Chubaty", email = "achubaty@for-cast.ca",
            role = c("aut", "cre"), comment = c(ORCID = "0000-0001-7146-8135"))
@@ -34,5 +34,4 @@ Language: en-CA
 License: Apache License (>= 2)
 Roxygen: list(markdown = TRUE)
 Config/testthat/edition: 3
-Config/roxygen2/version: 8.0.0
-RoxygenNote: 8.0.0
+Config/roxygen2/version: 8.1.0

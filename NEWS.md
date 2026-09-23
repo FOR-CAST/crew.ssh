@@ -1,3 +1,9 @@
+# crew.ssh 0.0.6
+
+* `crew_controller_ssh()` gains `log_directory` and `log_join`, which capture each worker's output to a per-worker log file. The launcher previously probed for `crew`'s inherited log helpers, but those are defined only on `crew`'s *local* launcher (they read its `options_local`) and this class inherits from the base launcher, so the "fall back to discarding output" path was the only one ever taken and worker output was always discarded. Because the local `ssh` client's streams carry both the remote R process's output and `ssh`'s own diagnostics, a worker that dies with its connection now leaves a record instead of vanishing silently.
+
+* The default `ssh_options` now set `ServerAliveCountMax` alongside `ServerAliveInterval`. Only the interval was set before, so OpenSSH's default count of 3 applied and the client abandoned a connection after 90 seconds of silence. A worker that loses its connection is terminated by `mirai`'s `autoexit`, and its task restarts from the beginning, so a brief stall on the control node could destroy every worker on every node at once and discard hours of work per worker. The new default tolerates 10 minutes.
+
 # crew.ssh 0.0.5
 
 * The bundled `sync-nodes.R` template restores the renv profiles listed in the new `crew.ssh.renv_profiles` option on each node, after the default profile (`RENV_PROFILE=<profile> <rscript> -e 'renv::restore(prompt = FALSE)'`, from `renv/profiles/<profile>/renv.lock` in the node's fast-forwarded checkout, so that lockfile must be committed and pushed). Before this, only the default profile was restored, so a profile that workers use (e.g. a separate library for one kind of task) was never updated on the nodes. The script stops before contacting any node if a listed name is not a plain profile name (`default`, `.` and `..` are rejected) or has no `renv/profiles/<profile>/renv.lock` in the project root.

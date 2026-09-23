@@ -10,9 +10,12 @@ crew_controller_ssh(
   name = "ssh",
   rscript = NULL,
   homogeneous = TRUE,
-  ssh_options = c("-o", "BatchMode=yes", "-o", "ServerAliveInterval=30"),
+  ssh_options = c("-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", "-o",
+    "ServerAliveCountMax=20"),
   request_tty = FALSE,
   tunnel = FALSE,
+  log_directory = NULL,
+  log_join = TRUE,
   host = NULL,
   port = NULL,
   tls = crew::crew_tls(),
@@ -62,7 +65,8 @@ how a \code{NULL} \code{rscript} is resolved. Set \code{FALSE} for mixed install
 remote \code{PATH} must provide \code{Rscript}, or set \code{rscript} per node).}
 
 \item{ssh_options}{Character vector of options passed to the \code{ssh} client
-before the host (for example \code{c("-o", "BatchMode=yes")}).}
+before the host (for example \code{c("-o", "BatchMode=yes")}). Each function's
+own default differs; see its usage.}
 
 \item{request_tty}{Logical: if \code{TRUE}, launch with \code{ssh -tt} (force a remote
 pseudo-tty) so the remote R is sent \code{SIGHUP} and exits when the local \code{ssh}
@@ -77,6 +81,15 @@ SSH reverse tunnel (\code{ssh -R}) instead of a direct TCP connection, so NO
 inbound port needs to be open on the control node (ideal for firewalled
 networks, and more secure -- the dispatcher binds \verb{127.0.0.1} only). Forces
 \code{host = "127.0.0.1"} (any supplied \code{host} is ignored). Default \code{FALSE}.}
+
+\item{log_directory}{Directory for per-worker log files, or \code{NULL} (the
+default) to discard worker output. Each worker's \code{ssh} client writes the
+remote R process's output here, along with \code{ssh}'s own diagnostics, which is
+the only record of why a worker died. Set it for any long run.}
+
+\item{log_join}{Logical: if \code{TRUE} (default), a worker's standard error is
+merged into its single log file; if \code{FALSE}, the two streams are written to
+separate \code{-stdout} / \code{-stderr} files.}
 
 \item{host}{Local (control-node) host name or IP that remote workers dial
 back into. Must be reachable from the worker nodes.}
@@ -204,6 +217,27 @@ nodes can reach (NOT \verb{127.0.0.1}) with the dispatcher's TCP port reachable;
 \item for \code{tunnel = TRUE}: nothing extra -- the dial-back rides the SSH connection,
 so no inbound port is opened (best for firewalled networks).
 }
+}
+
+\section{Connection keepalive}{
+
+The default \code{ssh_options} set \code{ServerAliveInterval} and \code{ServerAliveCountMax}
+together, and both matter. A worker whose \code{ssh} client gives up loses its
+connection to the dispatcher, \code{mirai}'s \code{autoexit} then terminates the
+worker, and whatever it was computing restarts from the beginning. With only
+the interval set, OpenSSH's default \code{ServerAliveCountMax} of 3 tears the
+connection down after 90 seconds of silence -- and since a stall on the
+control node affects every connection at once, one brief hiccup can destroy
+every worker on every node simultaneously. The default here tolerates 10
+minutes, on the reasoning that waiting longer on a genuinely dead node costs
+only the wait, while abandoning a live one costs all of its work so far.
+
+These are passed as \code{ssh -o}, which takes precedence over \verb{~/.ssh/config} and
+\verb{/etc/ssh/ssh_config} for those two keys only; every other setting for the
+host (\code{Hostname}, \code{Port}, \code{User}, \code{IdentityFile}, \code{ProxyJump} and so on) still
+comes from those files. Note that supplying \code{ssh_options} REPLACES this
+default vector rather than adding to it, so a caller who sets it takes on
+responsibility for the keepalive settings too.
 }
 
 \examples{
