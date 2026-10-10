@@ -1,3 +1,7 @@
+# crew.ssh 0.0.7
+
+* Workers no longer die mid-task when more workers launch. `crew` (>= 1.3) drops its launch records, and with them the handles `launch_worker()` returns, once later workers connect. A collected handle killed its `ssh` client (it is created with `cleanup = TRUE`), which closed the worker's connection and reverse tunnel, so `mirai`'s `autoexit` ended the worker and `crew` reported its task as crashed. In practice any worker whose task outlasted the next launch was lost, typically within seconds. The launcher now keeps each client's handle until the client exits, and releases them on `terminate()`.
+
 # crew.ssh 0.0.6
 
 * `crew_controller_ssh()` gains `log_directory` and `log_join`, which capture each worker's output to a per-worker log file. The launcher previously probed for `crew`'s inherited log helpers, but those are defined only on `crew`'s *local* launcher (they read its `options_local`) and this class inherits from the base launcher, so the "fall back to discarding output" path was the only one ever taken and worker output was always discarded. Because the local `ssh` client's streams carry both the remote R process's output and `ssh`'s own diagnostics, a worker that dies with its connection now leaves a record instead of vanishing silently.

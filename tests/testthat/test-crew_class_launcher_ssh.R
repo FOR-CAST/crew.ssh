@@ -142,3 +142,66 @@ test_that("log_prepare creates the log directory", {
   controller$launcher$.__enclos_env__$private$.log_prepare()
   expect_true(dir.exists(dir))
 })
+
+## crew drops its launch records, and with them the handles launch_worker() returns, once later
+## workers connect. A collected handle killed its ssh client (`cleanup = TRUE`), and with it the
+## worker's connection and reverse tunnel, mid-task.
+fake_ssh <- function(script) {
+  bin <- tempfile("crew_ssh_bin_")
+  dir.create(bin)
+  writeLines(c("#!/bin/sh", script), file.path(bin, "ssh"))
+  Sys.chmod(file.path(bin, "ssh"), "0755")
+  bin
+}
+
+test_that("a worker's ssh client survives garbage collection of crew's handle", {
+  skip_on_os("windows")
+  beat <- tempfile("crew_ssh_beat_")
+  bin <- fake_ssh('i=0; while :; do i=$((i+1)); echo $i > "$CREW_SSH_TEST_BEAT"; sleep 0.1; done')
+  path <- Sys.getenv("PATH")
+  Sys.setenv(PATH = paste(bin, path, sep = .Platform$path.sep), CREW_SSH_TEST_BEAT = beat)
+  controller <- ssh_controller()
+  private <- controller$launcher$.__enclos_env__$private
+  on.exit(
+    {
+      for (handle in private$.handles) {
+        try(handle$kill(), silent = TRUE)
+      }
+      try(controller$terminate(), silent = TRUE)
+      Sys.setenv(PATH = path)
+      Sys.unsetenv("CREW_SSH_TEST_BEAT")
+      unlink(c(bin, beat), recursive = TRUE)
+    },
+    add = TRUE
+  )
+  controller$launcher$launch_worker(call = "crew::crew_worker()")
+  Sys.sleep(0.5)
+  invisible(gc(full = TRUE))
+  Sys.sleep(0.5)
+  first <- as.integer(readLines(beat))
+  Sys.sleep(0.5)
+  expect_gt(as.integer(readLines(beat)), first)
+})
+
+test_that("the launcher drops exited ssh clients and releases the rest on terminate", {
+  skip_on_os("windows")
+  bin <- fake_ssh("exit 0")
+  path <- Sys.getenv("PATH")
+  Sys.setenv(PATH = paste(bin, path, sep = .Platform$path.sep))
+  controller <- ssh_controller()
+  private <- controller$launcher$.__enclos_env__$private
+  on.exit(
+    {
+      try(controller$terminate(), silent = TRUE)
+      Sys.setenv(PATH = path)
+      unlink(bin, recursive = TRUE)
+    },
+    add = TRUE
+  )
+  first <- controller$launcher$launch_worker(call = "crew::crew_worker()")
+  first$wait(5000)
+  controller$launcher$launch_worker(call = "crew::crew_worker()")
+  expect_length(private$.handles, 1L)
+  controller$launcher$terminate()
+  expect_length(private$.handles, 0L)
+})

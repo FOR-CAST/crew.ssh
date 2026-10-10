@@ -83,6 +83,10 @@ build_ssh_args <- function(spec, call, r_arguments = NULL, request_tty = FALSE, 
 #' `docker run` container) are owned by their own service and are not reaped by
 #' SSH or `crew`; the worker code is responsible for tearing those down.
 #'
+#' The launcher holds each worker's `ssh` client until the client exits: `crew`
+#' releases its own handle to a client once later workers connect, and a
+#' collected handle would kill the client, and the worker's connection with it.
+#'
 #' @section Reverse-tunnel dial-back:
 #' With `tunnel = TRUE` (in [crew_controller_ssh()]) the dispatcher binds
 #' `127.0.0.1` and each worker is launched with `ssh -R <node-port>:127.0.0.1:<dispatcher-port>`,
@@ -144,16 +148,34 @@ crew_class_launcher_ssh <- R6Class(
       }
       ## build_ssh_args() cd's into projdir first so the remote .Rprofile / renv
       ## activate and relative paths resolve, then runs the crew_worker() call.
-      processx::process$new(
+      handle <- processx::process$new(
         command = "ssh",
         args = build_ssh_args(spec, call, private$.r_arguments, self$request_tty, tunnel),
         cleanup = TRUE,
         stdout = private$.log_path("stdout", name),
         stderr = private$.log_path("stderr", name)
       )
+      private$.retain(handle)
+    },
+    #' @description Release the `ssh` clients of the launched workers, then
+    #'   terminate as [crew::crew_class_launcher] does.
+    #' @return `NULL` (invisibly).
+    terminate = function() {
+      private$.handles <- list()
+      super$terminate()
     }
   ),
   private = list(
+    ## The handles of the launched workers' ssh clients, kept until each client exits. crew
+    ## drops its own launch records, and with them the handles launch_worker() returns, once
+    ## later workers connect; a collected handle kills its client (`cleanup = TRUE`), which
+    ## closes the worker's connection and reverse tunnel mid-task.
+    .handles = list(),
+    .retain = function(handle) {
+      alive <- vapply(private$.handles, function(h) h$is_alive(), logical(1L))
+      private$.handles <- c(private$.handles[alive], list(handle))
+      handle
+    },
     ## cumulative launches per node (named integer vector); lazily initialized
     ## from `caps` on first use so it can be set after construction.
     .assigned = NULL,

@@ -33,6 +33,10 @@ does not by itself guarantee the remote R exits; set \code{request_tty = TRUE} i
 capture). Note that any \emph{child processes the worker spawns} (for example a
 \verb{docker run} container) are owned by their own service and are not reaped by
 SSH or \code{crew}; the worker code is responsible for tearing those down.
+
+The launcher holds each worker's \code{ssh} client until the client exits: \code{crew}
+releases its own handle to a client once later workers connect, and a
+collected handle would kill the client, and the worker's connection with it.
 }
 
 \section{Reverse-tunnel dial-back}{
@@ -85,6 +89,7 @@ into its single log file. Set by \code{\link[=crew_controller_ssh]{crew_controll
 \subsection{Public methods}{
   \itemize{
     \item \href{#method-crew_class_launcher_ssh-launch_worker}{\code{crew_class_launcher_ssh$launch_worker()}}
+    \item \href{#method-crew_class_launcher_ssh-terminate}{\code{crew_class_launcher_ssh$terminate()}}
     \item \href{#method-crew_class_launcher_ssh-clone}{\code{crew_class_launcher_ssh$clone()}}
   }
 }
@@ -100,7 +105,6 @@ into its single log file. Set by \code{\link[=crew_controller_ssh]{crew_controll
   <li><span class="pkg-link" data-pkg="crew" data-topic="crew_class_launcher" data-id="set_name"><a href='../../crew/html/crew_class_launcher.html#method-crew_class_launcher-set_name'><code>crew::crew_class_launcher$set_name()</code></a></span></li>
   <li><span class="pkg-link" data-pkg="crew" data-topic="crew_class_launcher" data-id="settings"><a href='../../crew/html/crew_class_launcher.html#method-crew_class_launcher-settings'><code>crew::crew_class_launcher$settings()</code></a></span></li>
   <li><span class="pkg-link" data-pkg="crew" data-topic="crew_class_launcher" data-id="start"><a href='../../crew/html/crew_class_launcher.html#method-crew_class_launcher-start'><code>crew::crew_class_launcher$start()</code></a></span></li>
-  <li><span class="pkg-link" data-pkg="crew" data-topic="crew_class_launcher" data-id="terminate"><a href='../../crew/html/crew_class_launcher.html#method-crew_class_launcher-terminate'><code>crew::crew_class_launcher$terminate()</code></a></span></li>
   <li><span class="pkg-link" data-pkg="crew" data-topic="crew_class_launcher" data-id="terminate_workers"><a href='../../crew/html/crew_class_launcher.html#method-crew_class_launcher-terminate_workers'><code>crew::crew_class_launcher$terminate_workers()</code></a></span></li>
   <li><span class="pkg-link" data-pkg="crew" data-topic="crew_class_launcher" data-id="validate"><a href='../../crew/html/crew_class_launcher.html#method-crew_class_launcher-validate'><code>crew::crew_class_launcher$validate()</code></a></span></li>
 </ul>
@@ -125,6 +129,22 @@ the worker (supplied by \code{crew}).}
   }
   \subsection{Returns}{
     A \code{processx} handle for the local \code{ssh} client process.
+  }
+}
+
+\if{html}{\out{<hr>}}
+\if{html}{\out{<a id="method-crew_class_launcher_ssh-terminate"></a>}}
+\if{latex}{\out{\hypertarget{method-crew_class_launcher_ssh-terminate}{}}}
+\subsection{\code{crew_class_launcher_ssh$terminate()}}{
+  Release the \code{ssh} clients of the launched workers, then
+terminate as \link[crew:crew_class_launcher]{crew::crew_class_launcher} does.
+  \subsection{Usage}{
+    \if{html}{\out{<div class="r">}}
+    \preformatted{crew_class_launcher_ssh$terminate()}
+    \if{html}{\out{</div>}}
+  }
+  \subsection{Returns}{
+    \code{NULL} (invisibly).
   }
 }
 
