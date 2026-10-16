@@ -1,17 +1,16 @@
 ## SSH launcher plugin for crew.
 ##
 ## Subclass of crew::crew_class_launcher whose workers are remote R processes
-## started over SSH. Each launch is placed on the node whose share of launched
-## workers (launched / cap) is currently lowest, so that over sum(caps) launches
-## every node receives exactly its capacity, and heterogeneous nodes share one
-## controller in proportion to their `caps`. Build controllers with
-## crew_controller_ssh(); this class is exported only for advanced use.
+## started over SSH. Each launch is placed on the node whose share of live
+## workers (live / cap) is currently lowest, so that no node runs more than its
+## capacity while another has room, and heterogeneous nodes share one controller
+## in proportion to their `caps`. Build controllers with crew_controller_ssh();
+## this class is exported only for advanced use.
 
-## Pick the node index whose launched-share (assigned / cap) is lowest. Over
-## sum(caps) launches this gives each node exactly its capacity; ties go to the
-## first (lowest-index) node. Internal.
-weighted_pick <- function(assigned, caps) {
-  which.min(assigned / caps)
+## Pick the node index whose share of live workers (live / cap) is lowest; ties
+## go to the first (lowest-index) node. Internal.
+weighted_pick <- function(live, caps) {
+  which.min(live / caps)
 }
 
 ## Extract the dispatcher TCP port from a crew_worker() call's url
@@ -62,15 +61,13 @@ build_ssh_args <- function(spec, call, r_arguments = NULL, request_tty = FALSE, 
 #' class directly.
 #'
 #' @section Placement:
-#' Each call to `launch_worker()` selects the node whose share of launched
-#' workers (`launched / cap`) is currently lowest, so workers are distributed
-#' across nodes in proportion to their per-node `caps`. With a persistent worker
-#' pool (`seconds_idle = Inf`, the [crew_controller_ssh()] default) and
-#' `workers = sum(caps)`, each node receives exactly its capacity and no node is
-#' over-committed. Placement is by cumulative launch count, so under worker churn
-#' (crashes / relaunches) the proportions are preserved but per-node caps are not
-#' strictly re-enforced; strict enforcement for transient pools is a planned
-#' enhancement.
+#' Each call to `launch_worker()` selects the node whose share of live workers
+#' (`live / cap`, counting the workers whose `ssh` client is still running) is
+#' currently lowest, so workers are distributed across nodes in proportion to
+#' their per-node `caps`. With `workers = sum(caps)` no node runs more than its
+#' capacity, whether the pool is persistent (`seconds_idle = Inf`, the
+#' [crew_controller_ssh()] default) or its workers are replaced, as after a crash
+#' or with `tasks_max`: a node whose workers finish sooner gets the next launches.
 #'
 #' @section Worker teardown:
 #' On normal shutdown the worker exits gracefully (the dispatcher closes the
@@ -155,7 +152,7 @@ crew_class_launcher_ssh <- R6Class(
         stdout = private$.log_path("stdout", name),
         stderr = private$.log_path("stderr", name)
       )
-      private$.retain(handle)
+      private$.retain(handle, host)
     },
     #' @description Release the `ssh` clients of the launched workers, then
     #'   terminate as [crew::crew_class_launcher] does.
@@ -166,19 +163,24 @@ crew_class_launcher_ssh <- R6Class(
     }
   ),
   private = list(
-    ## The handles of the launched workers' ssh clients, kept until each client exits. crew
-    ## drops its own launch records, and with them the handles launch_worker() returns, once
-    ## later workers connect; a collected handle kills its client (`cleanup = TRUE`), which
-    ## closes the worker's connection and reverse tunnel mid-task.
+    ## The handles of the launched workers' ssh clients, named by node, kept until each client
+    ## exits. crew drops its own launch records, and with them the handles launch_worker()
+    ## returns, once later workers connect; a collected handle kills its client
+    ## (`cleanup = TRUE`), which closes the worker's connection and reverse tunnel mid-task.
+    ## The live ones also give each node's worker count for placement.
     .handles = list(),
-    .retain = function(handle) {
+    .prune = function() {
       alive <- vapply(private$.handles, function(h) h$is_alive(), logical(1L))
-      private$.handles <- c(private$.handles[alive], list(handle))
+      private$.handles <- private$.handles[alive]
+      invisible(NULL)
+    },
+    .retain = function(handle, host) {
+      private$.prune()
+      new <- list(handle)
+      names(new) <- host
+      private$.handles <- c(private$.handles, new)
       handle
     },
-    ## cumulative launches per node (named integer vector); lazily initialized
-    ## from `caps` on first use so it can be set after construction.
-    .assigned = NULL,
     ## monotonic counter -> a distinct node-local reverse-tunnel port per launch
     ## (private/dynamic range 49152-59151) so co-located workers never collide.
     .tunnel_counter = 0L,
@@ -187,13 +189,9 @@ crew_class_launcher_ssh <- R6Class(
       49152L + ((private$.tunnel_counter - 1L) %% 10000L)
     },
     .pick_node = function() {
-      if (is.null(private$.assigned)) {
-        private$.assigned <- self$caps * 0L
-      }
-      index <- weighted_pick(private$.assigned, self$caps)
-      host <- names(self$caps)[index]
-      private$.assigned[host] <- private$.assigned[host] + 1L
-      host
+      private$.prune()
+      live <- table(factor(names(private$.handles), levels = names(self$caps)))
+      names(self$caps)[weighted_pick(as.integer(live), self$caps)]
     },
     ## Per-worker log capture. crew defines these helpers only on its LOCAL
     ## launcher (they read its `options_local`), and this class inherits from the

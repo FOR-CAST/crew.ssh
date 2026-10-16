@@ -11,15 +11,13 @@ class directly.
 }
 \section{Placement}{
 
-Each call to \code{launch_worker()} selects the node whose share of launched
-workers (\code{launched / cap}) is currently lowest, so workers are distributed
-across nodes in proportion to their per-node \code{caps}. With a persistent worker
-pool (\code{seconds_idle = Inf}, the \code{\link[=crew_controller_ssh]{crew_controller_ssh()}} default) and
-\code{workers = sum(caps)}, each node receives exactly its capacity and no node is
-over-committed. Placement is by cumulative launch count, so under worker churn
-(crashes / relaunches) the proportions are preserved but per-node caps are not
-strictly re-enforced; strict enforcement for transient pools is a planned
-enhancement.
+Each call to \code{launch_worker()} selects the node whose share of live workers
+(\code{live / cap}, counting the workers whose \code{ssh} client is still running) is
+currently lowest, so workers are distributed across nodes in proportion to
+their per-node \code{caps}. With \code{workers = sum(caps)} no node runs more than its
+capacity, whether the pool is persistent (\code{seconds_idle = Inf}, the
+\code{\link[=crew_controller_ssh]{crew_controller_ssh()}} default) or its workers are replaced, as after a crash
+or with \code{tasks_max}: a node whose workers finish sooner gets the next launches.
 }
 
 \section{Worker teardown}{

@@ -1,3 +1,7 @@
+# crew.ssh 0.0.8
+
+* Per-node caps now hold when workers are replaced, as after a crash or with `tasks_max`. Each launch goes to the node with the lowest share of live workers (`live / cap`, counting workers whose `ssh` client is still running) instead of the lowest share of all launches so far. Counting launches let a node exceed its cap: a node whose workers finished sooner kept getting its share of new workers while the other node's were still running.
+
 # crew.ssh 0.0.7
 
 * Workers no longer die mid-task when more workers launch. `crew` (>= 1.3) drops its launch records, and with them the handles `launch_worker()` returns, once later workers connect. A collected handle killed its `ssh` client (it is created with `cleanup = TRUE`), which closed the worker's connection and reverse tunnel, so `mirai`'s `autoexit` ended the worker and `crew` reported its task as crashed. In practice any worker whose task outlasted the next launch was lost, typically within seconds. The launcher now keeps each client's handle until the client exits, and releases them on `terminate()`.

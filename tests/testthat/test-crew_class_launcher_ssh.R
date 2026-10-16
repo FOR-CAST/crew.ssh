@@ -79,20 +79,15 @@ test_that("weighted_pick distributes launches in proportion to caps", {
   expect_identical(as.integer(table(factor(picks, levels = names(caps)))), c(1L, 3L))
 })
 
-test_that("the launcher subclasses crew_class_launcher and places by capacity", {
+test_that("the launcher subclasses crew_class_launcher", {
   controller <- crew_controller_ssh(
     nodes = c(a = 1L, b = 3L),
     projdir = "/proj",
     host = "127.0.0.1"
   )
   on.exit(try(controller$terminate(), silent = TRUE), add = TRUE)
-  launcher <- controller$launcher
-  expect_s3_class(launcher, "crew_class_launcher_ssh")
-  expect_s3_class(launcher, "crew_class_launcher")
-
-  pick_node <- launcher$.__enclos_env__$private$.pick_node
-  picks <- vapply(seq_len(4L), function(i) pick_node(), character(1L))
-  expect_identical(sort(picks), c("a", "b", "b", "b"))
+  expect_s3_class(controller$launcher, "crew_class_launcher_ssh")
+  expect_s3_class(controller$launcher, "crew_class_launcher")
 })
 
 ## Worker stdout/stderr is the only record of why a worker died: the ssh client
@@ -204,4 +199,50 @@ test_that("the launcher drops exited ssh clients and releases the rest on termin
   expect_length(private$.handles, 1L)
   controller$launcher$terminate()
   expect_length(private$.handles, 0L)
+})
+
+## Placement by cumulative launches let a node exceed its cap once workers were replaced (after a
+## crash, or with tasks_max): a node whose workers finished sooner kept getting its share.
+test_that("each launch goes to the node with the lowest share of live workers", {
+  skip_on_os("windows")
+  bin <- fake_ssh("sleep 60")
+  path <- Sys.getenv("PATH")
+  Sys.setenv(PATH = paste(bin, path, sep = .Platform$path.sep))
+  controller <- crew_controller_ssh(
+    nodes = c(a = 1L, b = 3L),
+    projdir = "/proj",
+    host = "127.0.0.1"
+  )
+  private <- controller$launcher$.__enclos_env__$private
+  on.exit(
+    {
+      for (handle in private$.handles) {
+        try(handle$kill(), silent = TRUE)
+      }
+      try(controller$terminate(), silent = TRUE)
+      Sys.setenv(PATH = path)
+      unlink(bin, recursive = TRUE)
+    },
+    add = TRUE
+  )
+  ## the host is the ssh client's second-to-last argument (the last is the remote command)
+  host_of <- function(handle) {
+    args <- handle$get_cmdline()
+    args[length(args) - 1L]
+  }
+  live <- function() {
+    running <- Filter(function(h) h$is_alive(), private$.handles)
+    hosts <- vapply(running, host_of, character(1L))
+    as.integer(table(factor(hosts, levels = c("a", "b"))))
+  }
+  for (i in 1:4) {
+    controller$launcher$launch_worker(call = "crew::crew_worker()")
+  }
+  expect_identical(live(), c(1L, 3L))
+  ## a worker on b exits: the next launch refills b, although a has had fewer launches
+  exited <- Filter(function(h) host_of(h) == "b", private$.handles)[[1L]]
+  exited$kill()
+  exited$wait(5000)
+  controller$launcher$launch_worker(call = "crew::crew_worker()")
+  expect_identical(live(), c(1L, 3L))
 })
