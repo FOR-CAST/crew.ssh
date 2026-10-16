@@ -18,6 +18,8 @@ their per-node \code{caps}. With \code{workers = sum(caps)} no node runs more th
 capacity, whether the pool is persistent (\code{seconds_idle = Inf}, the
 \code{\link[=crew_controller_ssh]{crew_controller_ssh()}} default) or its workers are replaced, as after a crash
 or with \code{tasks_max}: a node whose workers finish sooner gets the next launches.
+A replacement requested while every node is still full (its predecessor's
+\code{ssh} client has not yet exited) waits up to 60 seconds for a slot to free.
 }
 
 \section{Worker teardown}{

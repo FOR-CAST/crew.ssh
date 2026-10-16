@@ -149,6 +149,18 @@ fake_ssh <- function(script) {
   bin
 }
 
+## the host is an ssh client's second-to-last argument (the last is the remote command)
+host_of <- function(handle) {
+  args <- handle$get_cmdline()
+  args[length(args) - 1L]
+}
+
+## running ssh clients per host
+live_by_host <- function(private, hosts) {
+  running <- Filter(function(h) h$is_alive(), private$.handles)
+  as.integer(table(factor(vapply(running, host_of, character(1L)), levels = hosts)))
+}
+
 test_that("a worker's ssh client survives garbage collection of crew's handle", {
   skip_on_os("windows")
   beat <- tempfile("crew_ssh_beat_")
@@ -225,24 +237,50 @@ test_that("each launch goes to the node with the lowest share of live workers", 
     },
     add = TRUE
   )
-  ## the host is the ssh client's second-to-last argument (the last is the remote command)
-  host_of <- function(handle) {
-    args <- handle$get_cmdline()
-    args[length(args) - 1L]
-  }
-  live <- function() {
-    running <- Filter(function(h) h$is_alive(), private$.handles)
-    hosts <- vapply(running, host_of, character(1L))
-    as.integer(table(factor(hosts, levels = c("a", "b"))))
-  }
   for (i in 1:4) {
     controller$launcher$launch_worker(call = "crew::crew_worker()")
   }
-  expect_identical(live(), c(1L, 3L))
+  expect_identical(live_by_host(private, c("a", "b")), c(1L, 3L))
   ## a worker on b exits: the next launch refills b, although a has had fewer launches
   exited <- Filter(function(h) host_of(h) == "b", private$.handles)[[1L]]
   exited$kill()
   exited$wait(5000)
   controller$launcher$launch_worker(call = "crew::crew_worker()")
-  expect_identical(live(), c(1L, 3L))
+  expect_identical(live_by_host(private, c("a", "b")), c(1L, 3L))
+})
+
+## crew asks for a replacement as soon as a worker disconnects, while that worker's ssh client is
+## still exiting. With every node still counted full, the tie sent the replacement to the first
+## node, over its cap.
+test_that("a launch onto full nodes waits for an exiting worker's slot", {
+  skip_on_os("windows")
+  bin <- fake_ssh('sleep "$CREW_SSH_TEST_SLEEP"')
+  path <- Sys.getenv("PATH")
+  Sys.setenv(PATH = paste(bin, path, sep = .Platform$path.sep))
+  controller <- crew_controller_ssh(
+    nodes = c(a = 1L, b = 1L),
+    projdir = "/proj",
+    host = "127.0.0.1"
+  )
+  private <- controller$launcher$.__enclos_env__$private
+  on.exit(
+    {
+      for (handle in private$.handles) {
+        try(handle$kill(), silent = TRUE)
+      }
+      try(controller$terminate(), silent = TRUE)
+      Sys.setenv(PATH = path)
+      Sys.unsetenv("CREW_SSH_TEST_SLEEP")
+      unlink(bin, recursive = TRUE)
+    },
+    add = TRUE
+  )
+  Sys.setenv(CREW_SSH_TEST_SLEEP = "60")
+  controller$launcher$launch_worker(call = "crew::crew_worker()")
+  Sys.setenv(CREW_SSH_TEST_SLEEP = "2")
+  controller$launcher$launch_worker(call = "crew::crew_worker()")
+  Sys.setenv(CREW_SSH_TEST_SLEEP = "60")
+  controller$launcher$launch_worker(call = "crew::crew_worker()")
+  Sys.sleep(0.5)
+  expect_identical(live_by_host(private, c("a", "b")), c(1L, 1L))
 })

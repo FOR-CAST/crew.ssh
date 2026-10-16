@@ -68,6 +68,8 @@ build_ssh_args <- function(spec, call, r_arguments = NULL, request_tty = FALSE, 
 #' capacity, whether the pool is persistent (`seconds_idle = Inf`, the
 #' [crew_controller_ssh()] default) or its workers are replaced, as after a crash
 #' or with `tasks_max`: a node whose workers finish sooner gets the next launches.
+#' A replacement requested while every node is still full (its predecessor's
+#' `ssh` client has not yet exited) waits up to 60 seconds for a slot to free.
 #'
 #' @section Worker teardown:
 #' On normal shutdown the worker exits gracefully (the dispatcher closes the
@@ -188,10 +190,22 @@ crew_class_launcher_ssh <- R6Class(
       private$.tunnel_counter <- private$.tunnel_counter + 1L
       49152L + ((private$.tunnel_counter - 1L) %% 10000L)
     },
-    .pick_node = function() {
+    ## crew asks for a replacement as soon as a worker disconnects, while that worker's ssh
+    ## client may still be exiting. With every node then counted full, wait (up to this many
+    ## seconds) for a slot to free, rather than put the replacement on a node at its cap.
+    .seconds_full = 60,
+    .live = function() {
       private$.prune()
-      live <- table(factor(names(private$.handles), levels = names(self$caps)))
-      names(self$caps)[weighted_pick(as.integer(live), self$caps)]
+      as.integer(table(factor(names(private$.handles), levels = names(self$caps))))
+    },
+    .pick_node = function() {
+      live <- private$.live()
+      deadline <- Sys.time() + private$.seconds_full
+      while (all(live >= self$caps) && Sys.time() < deadline) {
+        Sys.sleep(0.25)
+        live <- private$.live()
+      }
+      names(self$caps)[weighted_pick(live, self$caps)]
     },
     ## Per-worker log capture. crew defines these helpers only on its LOCAL
     ## launcher (they read its `options_local`), and this class inherits from the

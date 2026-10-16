@@ -1,3 +1,7 @@
+# crew.ssh 0.0.9
+
+* A replacement worker no longer lands on a node at its cap while the worker it replaces is still exiting. `crew` asks for the replacement as soon as a worker disconnects, but the old worker's `ssh` client lives on for a few seconds while its R process exits, so every node could still look full; the tie went to the first node in `caps`. When workers finish together, as the first wave of a `tasks_max = 1` pool does, that node went over its cap and stayed there. A launch onto full nodes now waits up to 60 seconds for a slot to free.
+
 # crew.ssh 0.0.8
 
 * Per-node caps now hold when workers are replaced, as after a crash or with `tasks_max`. Each launch goes to the node with the lowest share of live workers (`live / cap`, counting workers whose `ssh` client is still running) instead of the lowest share of all launches so far. Counting launches let a node exceed its cap: a node whose workers finished sooner kept getting its share of new workers while the other node's were still running.
