@@ -21,6 +21,11 @@ jobs:
           - { os: ubuntu-latest, r: "release" }
           - { os: ubuntu-latest, r: "4.4" } # the DESCRIPTION Depends floor
     env:
+      ## at most 2 cores for the tests, as CRAN asks (tests/testthat/setup-cores.R)
+      OMP_THREAD_LIMIT: 2
+      OMP_NUM_THREADS: 2
+      OPENBLAS_NUM_THREADS: 2
+      MKL_NUM_THREADS: 2
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
       CREW_SSH_TEST_INTEGRATION: "true" # enable the loopback integration test
