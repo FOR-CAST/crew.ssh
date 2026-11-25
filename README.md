@@ -133,12 +133,25 @@ set once on `crew_controller_ssh()` for every node.
   worker's scope is removed when the worker exits.
 - **Requirement.** The node's systemd user manager must have the memory
   controller delegated to it, otherwise systemd accepts the limit and does not
-  apply it. A launch refuses to start a worker on such a node, and
-  `crew_ssh_check(..., slice = , memory_max = )` reports `memory_delegated` per
-  node, along with `memory_max_gb`, the limit R sees from inside the slice.
+  apply it. A launch refuses to start a worker on such a node.
 - Enable lingering (`loginctl enable-linger`) on the nodes: without it, the
   user's systemd manager, and the slice's workers with it, stop when the user's
   last login session on that node ends.
+
+Check the nodes before a run. Given the same `slice` and `memory_max`,
+`crew_ssh_check()` sets the limit and starts its probe the way a worker starts,
+then reports per node whether the memory controller is delegated
+(`memory_delegated`) and the limit R sees from inside the slice
+(`memory_max_gb`):
+
+```r
+crew_ssh_check(
+  nodes = c(host2 = 1L, host3 = 1L),
+  projdir = "/home/me/myproject",
+  slice = "myproject.slice",
+  memory_max = "50%"
+)
+```
 
 ## Worker teardown and cleanup
 
@@ -156,9 +169,10 @@ processes, the worker code must tear them down itself (for example `docker run
 
 ## Lifecycle
 
-Experimental. Expect breaking changes. Known limitation: placement preserves
-proportions but does not strictly re-enforce per-node caps under worker churn
-(crashes / relaunches); strict enforcement for transient pools is planned.
+Experimental. Expect breaking changes. Per-node caps hold when workers are
+replaced, after a crash or with `tasks_max`: each launch goes to the node with
+the lowest share of live workers (since 0.0.8), and a launch onto full nodes
+waits up to 60 seconds for an exiting worker's slot (since 0.0.9).
 
 ## License
 
