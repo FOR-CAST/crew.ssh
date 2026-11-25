@@ -47,3 +47,13 @@ skip_if_no_ssh_cluster <- function() {
     sprintf("set %s to run the multi-node SSH test", paste(needed, collapse = ", "))
   )
 }
+
+# Put a stand-in `ssh` running `script` first on the PATH (prepend the returned directory),
+# so launches can be tested without a real ssh connection.
+fake_ssh <- function(script) {
+  bin <- tempfile("crew_ssh_bin_")
+  dir.create(bin)
+  writeLines(c("#!/bin/sh", script), file.path(bin, "ssh"))
+  Sys.chmod(file.path(bin, "ssh"), "0755")
+  bin
+}

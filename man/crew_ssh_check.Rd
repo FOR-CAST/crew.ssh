@@ -11,15 +11,18 @@ crew_ssh_check(
   homogeneous = TRUE,
   ssh_options = c("-o", "BatchMode=yes", "-o", "ConnectTimeout=10"),
   packages = "crew",
-  timeout = 30
+  timeout = 30,
+  slice = NULL,
+  memory_max = NULL
 )
 }
 \arguments{
 \item{nodes}{Either a named integer vector mapping host names to per-node
 worker capacities (for example \code{c(node1 = 8L, node2 = 16L)}), or a list of
 \code{\link[=crew_ssh_node]{crew_ssh_node()}} objects when nodes need different \code{rscript} / \code{projdir} /
-\code{ssh_options}. The controller's total \code{workers} is the sum of the per-node
-capacities, and workers are placed in proportion to them.}
+\code{ssh_options} / \code{slice} / \code{memory_max}. The controller's total \code{workers} is
+the sum of the per-node capacities, and workers are placed in proportion to
+them.}
 
 \item{projdir}{Path to the project directory on the remote nodes (identical
 across nodes unless overridden per node via \code{\link[=crew_ssh_node]{crew_ssh_node()}}). Each worker
@@ -47,11 +50,30 @@ own default differs; see its usage.}
 on each node (default \code{"crew"}, which every worker needs).}
 
 \item{timeout}{Per-SSH-command timeout in seconds.}
+
+\item{slice}{Name of a systemd user slice on the remote nodes, ending in
+\code{.slice} (for example \code{"crew.slice"}), or \code{NULL} (the default) to run R
+directly. With a slice, each R process is started as \verb{systemd-run --user --scope --slice=<slice> <rscript> ...}, so all of a node's R processes share
+the slice's cgroup and any limit set on it. As in systemd, a \code{-} nests a
+slice in another (\code{a-b.slice} is inside \code{a.slice}). Override per node via
+\code{\link[=crew_ssh_node]{crew_ssh_node()}}.}
+
+\item{memory_max}{Memory limit for the slice on each node, in the syntax of
+systemd's \verb{MemoryMax=}: a size in bytes with an optional \code{K}, \code{M}, \code{G} or
+\code{T} suffix (\code{"488G"}), or a percentage of the node's RAM (\code{"50\%"}). Requires
+\code{slice}. Before each R process starts, the slice gets \verb{MemoryMax=} and
+\code{MemorySwapMax=0}, and the process is not started if the node's systemd user
+manager cannot enforce them. \code{NULL} (the default) sets no limit. Override
+per node via \code{\link[=crew_ssh_node]{crew_ssh_node()}}.}
 }
 \value{
 A data frame (class \code{crew_ssh_check}), one row per node, with columns
-\code{host}, \code{ssh}, \code{projdir}, \code{rscript}, \code{r_version}, \code{missing_packages}, \code{ok},
-and \code{detail} (diagnostic text for the first failing step).
+\code{host}, \code{ssh}, \code{projdir}, \code{rscript}, \code{r_version}, \code{memory_delegated}
+(whether the node's systemd user manager has the memory controller, which a
+\code{memory_max} needs), \code{memory_max_gb} (the smallest memory limit on the probe's
+cgroup and those above it, \code{Inf} if none is set), \code{missing_packages}, \code{ok},
+and \code{detail} (diagnostic text for the first failing step). A node with a
+\code{memory_max} is \code{ok} only if \code{memory_delegated} is \code{TRUE}.
 }
 \description{
 \strong{Experimental.} For each node, verify over SSH (in order) that the host
@@ -60,12 +82,27 @@ report its R version), and the required \code{packages} load. Use this before a 
 to catch setup problems early, instead of debugging a pipeline that silently
 launches no workers.
 }
+\details{
+The \code{Rscript} probe starts the way a worker would, so with \code{slice} it runs in
+the slice, and with \code{memory_max} it first sets the slice's limit on the node,
+as a worker launch does (see the memory cap section of
+\code{\link[=crew_controller_ssh]{crew_controller_ssh()}}). The \code{memory_max_gb} column is then the limit a worker
+would see.
+}
 \examples{
 \dontrun{
 crew_ssh_check(
   nodes = c(host1 = 1L, host2 = 1L),
   projdir = "/home/me/myproject",
   packages = c("crew", "targets")
+)
+
+## also confirm the slice's limit reaches R on each node
+crew_ssh_check(
+  nodes = c(host1 = 1L, host2 = 1L),
+  projdir = "/home/me/myproject",
+  slice = "crew.slice",
+  memory_max = "50\%"
 )
 }
 }

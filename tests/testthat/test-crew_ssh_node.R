@@ -84,3 +84,57 @@ test_that("normalize_nodes allows a NULL projdir (for node-stat callers)", {
   nodes <- normalize_nodes(c(a = 1L), rscript = "R", projdir = NULL, ssh_options = NULL)
   expect_null(nodes$a$projdir)
 })
+
+test_that("crew_ssh_node keeps a slice and memory limit, NULL by default", {
+  n <- crew_ssh_node("host1", 2L)
+  expect_null(n$slice)
+  expect_null(n$memory_max)
+  capped <- crew_ssh_node("host1", 2L, slice = "crew.slice", memory_max = "50%")
+  expect_identical(capped$slice, "crew.slice")
+  expect_identical(capped$memory_max, "50%")
+  expect_identical(crew_ssh_node("h", 1L, memory_max = "488G")$memory_max, "488G")
+  expect_identical(crew_ssh_node("h", 1L, memory_max = "infinity")$memory_max, "infinity")
+})
+
+test_that("crew_ssh_node validates the slice and memory limit", {
+  expect_snapshot(error = TRUE, crew_ssh_node("host1", 1L, slice = "crew"))
+  expect_snapshot(error = TRUE, crew_ssh_node("host1", 1L, slice = "crew.slice; rm"))
+  expect_snapshot(error = TRUE, crew_ssh_node("host1", 1L, memory_max = "half"))
+  expect_snapshot(error = TRUE, crew_ssh_node("host1", 1L, memory_max = 0.5))
+})
+
+test_that("normalize_nodes applies the controller's slice and limit unless a node sets its own", {
+  nodes <- normalize_nodes(
+    list(crew_ssh_node("a", 1L), crew_ssh_node("b", 1L, slice = "b.slice", memory_max = "100G")),
+    rscript = "R",
+    projdir = "/p",
+    ssh_options = NULL,
+    slice = "crew.slice",
+    memory_max = "50%"
+  )
+  expect_identical(nodes$a$slice, "crew.slice")
+  expect_identical(nodes$a$memory_max, "50%")
+  expect_identical(nodes$b$slice, "b.slice")
+  expect_identical(nodes$b$memory_max, "100G")
+
+  plain <- normalize_nodes(c(a = 1L), rscript = "R", projdir = "/p", ssh_options = NULL)
+  expect_null(plain$a$slice)
+  expect_null(plain$a$memory_max)
+})
+
+test_that("normalize_nodes refuses a memory limit without a slice", {
+  expect_snapshot(
+    error = TRUE,
+    normalize_nodes(
+      c(a = 1L),
+      rscript = "R",
+      projdir = "/p",
+      ssh_options = NULL,
+      memory_max = "50%"
+    )
+  )
+  expect_snapshot(
+    error = TRUE,
+    normalize_nodes(c(a = 1L), rscript = "R", projdir = "/p", ssh_options = NULL, slice = "x")
+  )
+})

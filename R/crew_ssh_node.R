@@ -2,8 +2,9 @@
 ##
 ## A "node" is one remote machine: a host name, a per-node worker capacity, and
 ## optional per-node overrides of the controller-level Rscript path, project
-## directory, and ssh options. crew_controller_ssh() accepts either a named
-## integer vector (host -> capacity) or a list of crew_ssh_node() objects.
+## directory, ssh options, and systemd slice and memory limit.
+## crew_controller_ssh() accepts either a named integer vector (host -> capacity)
+## or a list of crew_ssh_node() objects.
 
 #' Define an SSH worker node
 #'
@@ -11,15 +12,15 @@
 #' [crew_controller_ssh()]: its host name, the number of workers it may run, and
 #' optional per-node overrides. Use a list of `crew_ssh_node()` objects (instead
 #' of the shorthand named-integer `nodes` vector) when nodes differ in their
-#' `Rscript` path, project directory, or ssh options.
+#' `Rscript` path, project directory, ssh options, or memory cap.
 #'
 #' @param host Host name or IP of the remote machine, as understood by `ssh`
 #'   (for example `"host1"` or `"user@host1"`).
 #' @param workers Single positive integer: the per-node worker capacity (the
 #'   maximum number of workers to place on this node).
-#' @param rscript,projdir,ssh_options Optional per-node overrides of the
-#'   controller-level defaults. `NULL` (the default) means inherit the value
-#'   passed to [crew_controller_ssh()].
+#' @param rscript,projdir,ssh_options,slice,memory_max Optional per-node
+#'   overrides of the controller-level defaults. `NULL` (the default) means
+#'   inherit the value passed to [crew_controller_ssh()].
 #'
 #' @return A `crew_ssh_node` object (a named list).
 #' @family ssh
@@ -27,7 +28,17 @@
 #' @examples
 #' crew_ssh_node("host1", workers = 88L)
 #' crew_ssh_node("host2", workers = 45L, rscript = "/opt/R/4.6.0/bin/Rscript")
-crew_ssh_node <- function(host, workers, rscript = NULL, projdir = NULL, ssh_options = NULL) {
+#' ## this node's workers share one cgroup, held to half of its RAM
+#' crew_ssh_node("host3", workers = 16L, slice = "crew.slice", memory_max = "50%")
+crew_ssh_node <- function(
+  host,
+  workers,
+  rscript = NULL,
+  projdir = NULL,
+  ssh_options = NULL,
+  slice = NULL,
+  memory_max = NULL
+) {
   if (!is.character(host) || length(host) != 1L || is.na(host) || !nzchar(host)) {
     stop("`host` must be a single non-empty string.", call. = FALSE)
   }
@@ -41,10 +52,54 @@ crew_ssh_node <- function(host, workers, rscript = NULL, projdir = NULL, ssh_opt
       workers = workers,
       rscript = rscript,
       projdir = projdir,
-      ssh_options = ssh_options
+      ssh_options = ssh_options,
+      slice = check_slice(slice),
+      memory_max = check_memory_max(memory_max)
     ),
     class = "crew_ssh_node"
   )
+}
+
+## Validate a systemd slice name, or NULL. The ".slice" suffix is required so the
+## name reads the same here as in `systemctl --user status <slice>`. Internal.
+check_slice <- function(slice) {
+  if (is.null(slice)) {
+    return(NULL)
+  }
+  if (
+    !is.character(slice) ||
+      length(slice) != 1L ||
+      is.na(slice) ||
+      !grepl("^[A-Za-z0-9:_.-]+[.]slice$", slice)
+  ) {
+    stop(
+      "`slice` must be a single systemd slice name ending in \".slice\", ",
+      "e.g. \"crew.slice\".",
+      call. = FALSE
+    )
+  }
+  slice
+}
+
+## Validate a systemd MemoryMax= value, or NULL. Internal.
+check_memory_max <- function(memory_max) {
+  if (is.null(memory_max)) {
+    return(NULL)
+  }
+  if (
+    !is.character(memory_max) ||
+      length(memory_max) != 1L ||
+      is.na(memory_max) ||
+      !grepl("^([0-9]+(\\.[0-9]+)?[KMGTPE]?|[0-9]+(\\.[0-9]+)?%|infinity)$", memory_max)
+  ) {
+    stop(
+      "`memory_max` must be a single systemd memory limit: a size in bytes with an ",
+      "optional K, M, G, T, P or E suffix (\"488G\"), a percentage of the node's RAM ",
+      "(\"50%\"), or \"infinity\".",
+      call. = FALSE
+    )
+  }
+  memory_max
 }
 
 ## Resolve a NULL Rscript the way parallelly::makeClusterPSOCK() does: the
@@ -57,9 +112,18 @@ resolve_rscript <- function(rscript, homogeneous) {
 
 ## Normalize the user `nodes` argument (a named integer vector or a list of
 ## crew_ssh_node objects) into a named list of fully-resolved specs: apply the
-## controller-level rscript/projdir/ssh_options defaults (resolving a NULL
-## rscript via `homogeneous`), validate, and key the list by host. Internal.
-normalize_nodes <- function(nodes, rscript, projdir = NULL, ssh_options, homogeneous = TRUE) {
+## controller-level rscript/projdir/ssh_options/slice/memory_max defaults
+## (resolving a NULL rscript via `homogeneous`), validate, and key the list by
+## host. Internal.
+normalize_nodes <- function(
+  nodes,
+  rscript,
+  projdir = NULL,
+  ssh_options,
+  homogeneous = TRUE,
+  slice = NULL,
+  memory_max = NULL
+) {
   if (is.numeric(nodes)) {
     nms <- names(nodes)
     if (is.null(nms) || any(!nzchar(nms))) {
@@ -85,6 +149,17 @@ normalize_nodes <- function(nodes, rscript, projdir = NULL, ssh_options, homogen
     n$rscript <- resolve_rscript(n$rscript %||% rscript, homogeneous)
     n$projdir <- n$projdir %||% projdir
     n$ssh_options <- n$ssh_options %||% ssh_options
+    n$slice <- check_slice(n$slice %||% slice)
+    n$memory_max <- check_memory_max(n$memory_max %||% memory_max)
+    ## the limit is set on the slice, so a node without one has nothing to hold it
+    if (!is.null(n$memory_max) && is.null(n$slice)) {
+      stop(
+        "`memory_max` needs a `slice` (node ",
+        n$host,
+        "): the limit is set on the systemd slice that holds the node's workers.",
+        call. = FALSE
+      )
+    }
     ## `projdir` is required by callers that run code on the node (e.g.
     ## crew_controller_ssh(), crew_ssh_check()) but irrelevant to ones that only
     ## read system stats (crew_ssh_monitor()); validate it only when supplied.

@@ -34,6 +34,115 @@ test_that("build_ssh_args prepends -tt only when request_tty = TRUE", {
   expect_false("-tt" %in% build_ssh_args(spec, "f()"))
 })
 
+test_that("build_ssh_args is unchanged without a slice", {
+  spec <- normalize_nodes(
+    c(host1 = 1L),
+    rscript = "Rscript",
+    projdir = "/proj",
+    ssh_options = NULL
+  )$host1
+  expect_identical(build_ssh_args(spec, "f()")[[2]], "cd '/proj' && 'Rscript' -e 'f()'")
+})
+
+test_that("build_ssh_args runs R in a scope in the node's slice", {
+  spec <- crew_ssh_node("a", 1L, rscript = "Rscript", projdir = "/p", slice = "crew.slice")
+  expect_identical(
+    build_ssh_args(spec, "f()")[[2]],
+    paste(
+      "cd '/p' &&",
+      "systemd-run --user --scope --quiet --collect --slice='crew.slice' 'Rscript' -e 'f()'"
+    )
+  )
+})
+
+test_that("build_ssh_args sets the slice's limit before R starts", {
+  spec <- crew_ssh_node(
+    "a",
+    1L,
+    rscript = "Rscript",
+    projdir = "/p",
+    slice = "crew.slice",
+    memory_max = "50%"
+  )
+  steps <- strsplit(build_ssh_args(spec, "f()")[[2]], " && ", fixed = TRUE)[[1]]
+  expect_length(steps, 4L)
+  expect_identical(steps[[1]], "cd '/p'")
+  expect_match(steps[[2]], memory_delegated_command, fixed = TRUE)
+  expect_identical(
+    steps[[3]],
+    "systemctl --user set-property --runtime 'crew.slice' 'MemoryMax=50%' MemorySwapMax=0"
+  )
+  expect_identical(
+    steps[[4]],
+    "systemd-run --user --scope --quiet --collect --slice='crew.slice' 'Rscript' -e 'f()'"
+  )
+})
+
+## Run a node's remote command here under sh, with stand-ins for grep, systemctl,
+## systemd-run and Rscript that log their arguments (systemd-run then runs the command it
+## was given), so the shell text itself is exercised without systemd or ssh.
+run_remote_here <- function(spec, delegated = TRUE) {
+  bin <- tempfile("crew_ssh_bin_")
+  dir.create(bin)
+  calls <- file.path(bin, "calls.log")
+  stub <- function(name, ...) {
+    writeLines(
+      c("#!/bin/sh", sprintf('echo "%s $*" >> "%s"', name, calls), ...),
+      file.path(bin, name)
+    )
+    Sys.chmod(file.path(bin, name), "0755")
+  }
+  stub("grep", sprintf("exit %d", if (delegated) 0L else 1L))
+  stub("systemctl")
+  stub(
+    "systemd-run",
+    'while [ $# -gt 0 ]; do case "$1" in --*) shift ;; *) break ;; esac; done',
+    'exec "$@"'
+  )
+  stub("Rscript")
+  withr::defer(unlink(bin, recursive = TRUE))
+  withr::local_envvar(PATH = paste(bin, Sys.getenv("PATH"), sep = .Platform$path.sep))
+  spec$rscript <- "Rscript"
+  spec$projdir <- tempdir()
+  result <- processx::run(
+    "sh",
+    c("-c", remote_command(spec, c("-e", shQuote("f()")))),
+    error_on_status = FALSE
+  )
+  result$calls <- if (file.exists(calls)) readLines(calls) else character()
+  result
+}
+
+test_that("the remote command sets the limit, then runs R in the slice", {
+  skip_on_os("windows")
+  spec <- crew_ssh_node("a", 1L, slice = "crew.slice", memory_max = "50%")
+  result <- run_remote_here(spec)
+  expect_identical(result$status, 0L)
+  expect_length(result$calls, 4L)
+  expect_match(
+    result$calls[[1]],
+    "^grep -qw memory /sys/fs/cgroup/user.slice/user-[0-9]+[.]slice/user@[0-9]+[.]service/"
+  )
+  expect_identical(
+    result$calls[-1],
+    c(
+      "systemctl --user set-property --runtime crew.slice MemoryMax=50% MemorySwapMax=0",
+      "systemd-run --user --scope --quiet --collect --slice=crew.slice Rscript -e f()",
+      "Rscript -e f()"
+    )
+  )
+})
+
+test_that("the remote command refuses to start R when the limit cannot hold", {
+  skip_on_os("windows")
+  spec <- crew_ssh_node("a", 1L, slice = "crew.slice", memory_max = "50%")
+  result <- run_remote_here(spec, delegated = FALSE)
+  expect_identical(result$status, 1L)
+  expect_match(result$stderr, "memory controller is not delegated")
+  expect_length(result$calls, 1L)
+  expect_match(result$calls[[1]], "^grep ")
+})
+
 test_that("dispatcher_port extracts the port from a crew_worker url", {
   call <- 'crew::crew_worker(settings = list(url = "tcp://127.0.0.1:57231", x = 1))'
   expect_identical(dispatcher_port(call), 57231L)
@@ -141,13 +250,6 @@ test_that("log_prepare creates the log directory", {
 ## crew drops its launch records, and with them the handles launch_worker() returns, once later
 ## workers connect. A collected handle killed its ssh client (`cleanup = TRUE`), and with it the
 ## worker's connection and reverse tunnel, mid-task.
-fake_ssh <- function(script) {
-  bin <- tempfile("crew_ssh_bin_")
-  dir.create(bin)
-  writeLines(c("#!/bin/sh", script), file.path(bin, "ssh"))
-  Sys.chmod(file.path(bin, "ssh"), "0755")
-  bin
-}
 
 ## the host is an ssh client's second-to-last argument (the last is the remote command)
 host_of <- function(handle) {

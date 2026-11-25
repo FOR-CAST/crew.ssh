@@ -16,6 +16,8 @@ crew_controller_ssh(
   tunnel = FALSE,
   log_directory = NULL,
   log_join = TRUE,
+  slice = NULL,
+  memory_max = NULL,
   host = NULL,
   port = NULL,
   tls = crew::crew_tls(),
@@ -41,8 +43,9 @@ crew_controller_ssh(
 \item{nodes}{Either a named integer vector mapping host names to per-node
 worker capacities (for example \code{c(node1 = 8L, node2 = 16L)}), or a list of
 \code{\link[=crew_ssh_node]{crew_ssh_node()}} objects when nodes need different \code{rscript} / \code{projdir} /
-\code{ssh_options}. The controller's total \code{workers} is the sum of the per-node
-capacities, and workers are placed in proportion to them.}
+\code{ssh_options} / \code{slice} / \code{memory_max}. The controller's total \code{workers} is
+the sum of the per-node capacities, and workers are placed in proportion to
+them.}
 
 \item{projdir}{Path to the project directory on the remote nodes (identical
 across nodes unless overridden per node via \code{\link[=crew_ssh_node]{crew_ssh_node()}}). Each worker
@@ -90,6 +93,21 @@ the only record of why a worker died. Set it for any long run.}
 \item{log_join}{Logical: if \code{TRUE} (default), a worker's standard error is
 merged into its single log file; if \code{FALSE}, the two streams are written to
 separate \code{-stdout} / \code{-stderr} files.}
+
+\item{slice}{Name of a systemd user slice on the remote nodes, ending in
+\code{.slice} (for example \code{"crew.slice"}), or \code{NULL} (the default) to run R
+directly. With a slice, each R process is started as \verb{systemd-run --user --scope --slice=<slice> <rscript> ...}, so all of a node's R processes share
+the slice's cgroup and any limit set on it. As in systemd, a \code{-} nests a
+slice in another (\code{a-b.slice} is inside \code{a.slice}). Override per node via
+\code{\link[=crew_ssh_node]{crew_ssh_node()}}.}
+
+\item{memory_max}{Memory limit for the slice on each node, in the syntax of
+systemd's \verb{MemoryMax=}: a size in bytes with an optional \code{K}, \code{M}, \code{G} or
+\code{T} suffix (\code{"488G"}), or a percentage of the node's RAM (\code{"50\%"}). Requires
+\code{slice}. Before each R process starts, the slice gets \verb{MemoryMax=} and
+\code{MemorySwapMax=0}, and the process is not started if the node's systemd user
+manager cannot enforce them. \code{NULL} (the default) sets no limit. Override
+per node via \code{\link[=crew_ssh_node]{crew_ssh_node()}}.}
 
 \item{host}{Local (control-node) host name or IP that remote workers dial
 back into. Must be reachable from the worker nodes.}
@@ -240,6 +258,37 @@ default vector rather than adding to it, so a caller who sets it takes on
 responsibility for the keepalive settings too.
 }
 
+\section{Memory cap per node}{
+
+With \code{slice} and \code{memory_max}, the workers on a node are held, together, to
+\code{memory_max}: the limit is on the slice, not on each worker. The kernel
+enforces it, so it holds however much memory a task turns out to need. When
+the slice's processes reach the limit the kernel first reclaims their page
+cache, then kills one of them, so the cost of an undersized limit is a killed
+worker (which \code{crew} reports as a crash) rather than a node short of memory
+for everything else on it. \code{MemorySwapMax=0} stops the slice from swapping
+instead. Size the workers to fit: a node's \code{workers} times the peak memory of
+one worker should stay under \code{memory_max}. Processes that read their cgroup's
+limits to size their own memory use see the slice's limit among them.
+
+The limit is set with \verb{systemctl --user set-property --runtime <slice> MemoryMax=<memory_max> MemorySwapMax=0} before each worker starts. This is
+idempotent, works whether or not the slice exists yet, and changes the limit
+of a slice already running. Every controller or user of the same slice name on
+a node shares the one limit, and the last value set applies to all of them.
+It leaves a drop-in under \verb{$XDG_RUNTIME_DIR/systemd/user.control/<slice>.d/}
+on the node, which goes away when the node reboots or the user's systemd
+manager stops; \verb{systemctl --user revert <slice>} removes it sooner, and
+\verb{systemctl --user stop <slice>} stops every process in the slice. Each worker
+runs in its own transient scope, which is removed when the worker exits.
+
+The node's systemd user manager must have the memory controller delegated to
+it, or the limit would be accepted and have no effect; a worker is not started
+on a node where it is not. \code{\link[=crew_ssh_check]{crew_ssh_check()}} reports this per node. Where the
+user has no lingering systemd manager on a node (\verb{loginctl enable-linger}), the
+manager stops once the user's last login session there ends, and the slice's
+processes stop with it.
+}
+
 \examples{
 \dontrun{
 controller <- crew_controller_ssh(
@@ -248,6 +297,15 @@ controller <- crew_controller_ssh(
   projdir = "/home/me/myproject",
   host = "control-node"
   # rscript defaults to this session's Rscript (homogeneous installs)
+)
+
+## hold each node's workers, together, to half of its RAM
+controller <- crew_controller_ssh(
+  nodes = c(host1 = 45L, host2 = 88L),
+  projdir = "/home/me/myproject",
+  tunnel = TRUE,
+  slice = "crew.slice",
+  memory_max = "50\%"
 )
 }
 }

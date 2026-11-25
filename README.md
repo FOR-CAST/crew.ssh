@@ -90,6 +90,56 @@ dispatcher mixes tasks across nodes and is **not** memory-aware, a single
 controller must be sized for the heaviest task; split heavy and light work into
 separate controllers (or separate targets) when their footprints differ a lot.
 
+## Capping memory per node
+
+On machines that other people's jobs share, it can be agreed that a project's
+workers use at most a fixed share of each machine's RAM, such as half. Sizing
+`workers` from estimates of per-task memory does not hold that line, because a
+task can need more than estimated. With `slice` and `memory_max`, the kernel
+holds it:
+
+```r
+controller <- crew_controller_ssh(
+  nodes = list(
+    crew_ssh_node("host1", workers = 8L),   # no cap
+    crew_ssh_node("host2", workers = 8L, slice = "myproject.slice", memory_max = "50%"),
+    crew_ssh_node("host3", workers = 8L, slice = "myproject.slice", memory_max = "50%")
+  ),
+  projdir = "/home/me/myproject",
+  tunnel = TRUE
+)
+```
+
+Each worker on `host2` and `host3` then starts as `systemd-run --user --scope
+--slice=myproject.slice <rscript> ...`, so a node's workers share one cgroup,
+and before each start the slice gets `MemoryMax=50%` and `MemorySwapMax=0` via
+`systemctl --user set-property --runtime`. The limit is on the slice, so it caps
+the node's workers together, not each one. `slice` and `memory_max` can also be
+set once on `crew_controller_ssh()` for every node.
+
+- **What happens at the limit.** The kernel reclaims the slice's page cache,
+  then kills one of its processes. A killed worker is reported by `crew` as a
+  crash, and its task is retried up to `crashes_max` times; processes outside
+  the slice are not touched. So keep `workers` x (peak memory of one worker)
+  under `memory_max`: the cap protects the machine, it does not make the work
+  fit.
+- **Tools that size themselves from cgroup limits** (for example a worker that
+  sets a raster library's memory budget from the limits of its own cgroup and
+  those above it) see the slice's limit.
+- **What it leaves on a node.** A runtime drop-in under
+  `$XDG_RUNTIME_DIR/systemd/user.control/<slice>.d/`, removed at reboot or when
+  the user's systemd manager stops. `systemctl --user revert <slice>` removes it
+  sooner; `systemctl --user stop <slice>` stops every process in the slice. Each
+  worker's scope is removed when the worker exits.
+- **Requirement.** The node's systemd user manager must have the memory
+  controller delegated to it, otherwise systemd accepts the limit and does not
+  apply it. A launch refuses to start a worker on such a node, and
+  `crew_ssh_check(..., slice = , memory_max = )` reports `memory_delegated` per
+  node, along with `memory_max_gb`, the limit R sees from inside the slice.
+- Enable lingering (`loginctl enable-linger`) on the nodes: without it, the
+  user's systemd manager, and the slice's workers with it, stop when the user's
+  last login session on that node ends.
+
 ## Worker teardown and cleanup
 
 On a normal stop, each worker exits gracefully, and its `seconds_idle` /

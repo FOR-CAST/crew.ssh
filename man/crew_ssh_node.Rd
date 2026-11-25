@@ -9,7 +9,9 @@ crew_ssh_node(
   workers,
   rscript = NULL,
   projdir = NULL,
-  ssh_options = NULL
+  ssh_options = NULL,
+  slice = NULL,
+  memory_max = NULL
 )
 }
 \arguments{
@@ -19,9 +21,9 @@ crew_ssh_node(
 \item{workers}{Single positive integer: the per-node worker capacity (the
 maximum number of workers to place on this node).}
 
-\item{rscript, projdir, ssh_options}{Optional per-node overrides of the
-controller-level defaults. \code{NULL} (the default) means inherit the value
-passed to \code{\link[=crew_controller_ssh]{crew_controller_ssh()}}.}
+\item{rscript, projdir, ssh_options, slice, memory_max}{Optional per-node
+overrides of the controller-level defaults. \code{NULL} (the default) means
+inherit the value passed to \code{\link[=crew_controller_ssh]{crew_controller_ssh()}}.}
 }
 \value{
 A \code{crew_ssh_node} object (a named list).
@@ -31,11 +33,13 @@ A \code{crew_ssh_node} object (a named list).
 \code{\link[=crew_controller_ssh]{crew_controller_ssh()}}: its host name, the number of workers it may run, and
 optional per-node overrides. Use a list of \code{crew_ssh_node()} objects (instead
 of the shorthand named-integer \code{nodes} vector) when nodes differ in their
-\code{Rscript} path, project directory, or ssh options.
+\code{Rscript} path, project directory, ssh options, or memory cap.
 }
 \examples{
 crew_ssh_node("host1", workers = 88L)
 crew_ssh_node("host2", workers = 45L, rscript = "/opt/R/4.6.0/bin/Rscript")
+## this node's workers share one cgroup, held to half of its RAM
+crew_ssh_node("host3", workers = 16L, slice = "crew.slice", memory_max = "50\%")
 }
 \seealso{
 Other ssh:

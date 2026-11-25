@@ -18,8 +18,9 @@ crew_ssh_monitor(
 \item{nodes}{Either a named integer vector mapping host names to per-node
 worker capacities (for example \code{c(node1 = 8L, node2 = 16L)}), or a list of
 \code{\link[=crew_ssh_node]{crew_ssh_node()}} objects when nodes need different \code{rscript} / \code{projdir} /
-\code{ssh_options}. The controller's total \code{workers} is the sum of the per-node
-capacities, and workers are placed in proportion to them.}
+\code{ssh_options} / \code{slice} / \code{memory_max}. The controller's total \code{workers} is
+the sum of the per-node capacities, and workers are placed in proportion to
+them.}
 
 \item{interval}{Refresh interval in seconds (default \code{2}).}
 

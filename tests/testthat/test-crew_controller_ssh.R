@@ -66,3 +66,17 @@ test_that("log_directory and log_join propagate to the launcher", {
   expect_identical(controller$launcher$log_directory, dir)
   expect_false(controller$launcher$log_join)
 })
+
+test_that("slice and memory_max reach every node's spec", {
+  controller <- crew_controller_ssh(
+    nodes = list(crew_ssh_node("a", 1L), crew_ssh_node("b", 2L, memory_max = "100G")),
+    projdir = "/proj",
+    host = "127.0.0.1",
+    slice = "crew.slice",
+    memory_max = "50%"
+  )
+  on.exit(try(controller$terminate(), silent = TRUE), add = TRUE)
+  nodes <- controller$launcher$nodes
+  expect_identical(vapply(nodes, `[[`, "", "slice"), c(a = "crew.slice", b = "crew.slice"))
+  expect_identical(vapply(nodes, `[[`, "", "memory_max"), c(a = "50%", b = "100G"))
+})

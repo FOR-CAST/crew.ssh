@@ -1,3 +1,7 @@
+# crew.ssh (development version)
+
+* `crew_controller_ssh()` and `crew_ssh_node()` gain `slice` and `memory_max`, which cap the memory of a node's workers together. With `slice`, each worker starts as `systemd-run --user --scope --slice=<slice> <rscript> ...`, so a node's workers share one cgroup; with `memory_max` (e.g. `"50%"`), each launch first sets `MemoryMax=` and `MemorySwapMax=0` on the slice, and refuses to start the worker where the node's systemd user manager cannot enforce them. The kernel then holds a shared machine to an agreed share of its RAM even when a task needs more memory than estimated. `crew_ssh_check()` takes the same arguments and reports `memory_delegated` and `memory_max_gb`, the limit R sees. Without them, workers launch as before.
+
 # crew.ssh 0.0.9
 
 * A replacement worker no longer lands on a node at its cap while the worker it replaces is still exiting. `crew` asks for the replacement as soon as a worker disconnects, but the old worker's `ssh` client lives on for a few seconds while its R process exits, so every node could still look full; the tie went to the first node in `caps`. When workers finish together, as the first wave of a `tasks_max = 1` pool does, that node went over its cap and stayed there. A launch onto full nodes now waits up to 60 seconds for a slot to free.

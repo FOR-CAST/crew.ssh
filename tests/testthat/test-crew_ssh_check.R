@@ -18,6 +18,34 @@ test_that("build_probe_args omits packages when none given", {
   expect_match(args[[length(args)]], "^cd '/p' && 'Rscript' -e '.*'$")
 })
 
+test_that("build_probe_args starts the probe the way a worker starts", {
+  spec <- crew_ssh_node(
+    "a",
+    1L,
+    rscript = "Rscript",
+    projdir = "/p",
+    slice = "crew.slice",
+    memory_max = "50%"
+  )
+  remote <- build_probe_args(spec, packages = "crew")[[2]]
+  expect_identical(sub(" -e .*$", "", remote), sub(" -e .*$", "", build_ssh_args(spec, "f()")[[2]]))
+  expect_match(remote, " crew$")
+})
+
+test_that("the probe reports R's version, its memory limit and the packages", {
+  skip_on_os("windows")
+  result <- processx::run(
+    file.path(R.home("bin"), "Rscript"),
+    c("--vanilla", "-e", ssh_probe_expr, "stats", "notapackage.crewssh")
+  )
+  out <- strsplit(result$stdout, "\n", fixed = TRUE)[[1]]
+  expect_true(any(grepl("^R_VERSION=[0-9]", out)))
+  ## a number of bytes, Inf where no cgroup limit is set, NA where cgroups cannot be read
+  expect_match(grep("^MEMORY_MAX=", out, value = TRUE), "^MEMORY_MAX=([0-9]+|Inf|NA)$")
+  expect_true("PKG=stats=TRUE" %in% out)
+  expect_true("PKG=notapackage.crewssh=FALSE" %in% out)
+})
+
 test_that("crew_ssh_check reports OK for a reachable localhost", {
   skip_on_cran()
   skip_if_no_local_ssh()

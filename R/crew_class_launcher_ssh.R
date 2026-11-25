@@ -35,19 +35,64 @@ rewrite_url_port <- function(call, from_port, to_port) {
   )
 }
 
+## Exits non-zero unless the user's systemd manager has the memory controller
+## delegated to it. Without it a slice's MemoryMax= is accepted and has no effect.
+## Internal.
+memory_delegated_command <- paste0(
+  "grep -qw memory ",
+  "\"/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers\""
+)
+
+## The remote shell command that runs `<rscript> <args>` on a node:
+##   "cd <projdir> && <rscript> <args>"
+## With a slice, R runs in a systemd scope in that slice, so a node's workers share
+## its cgroup:
+##   "cd <projdir> && systemd-run --user --scope --quiet --collect --slice=<slice> <rscript> <args>"
+## With a memory_max as well, two steps come before R: refuse to start unless the
+## memory controller is delegated, then set MemoryMax= and MemorySwapMax=0 on the
+## slice. `set-property --runtime` is idempotent, works on a slice that does not
+## exist yet, and changes a running slice's limit in place. `args` must already be
+## quoted for the remote shell. Internal.
+remote_command <- function(spec, args) {
+  run <- c(shQuote(spec$rscript), args)
+  setup <- NULL
+  if (!is.null(spec$slice)) {
+    slice <- shQuote(spec$slice)
+    run <- c("systemd-run --user --scope --quiet --collect", paste0("--slice=", slice), run)
+    if (!is.null(spec$memory_max)) {
+      setup <- c(
+        sprintf(
+          "{ %s || { echo %s >&2; exit 1; }; }",
+          memory_delegated_command,
+          shQuote(paste(
+            "crew.ssh: the memory controller is not delegated to the systemd user",
+            "manager, so MemoryMax= on the slice would have no effect"
+          ))
+        ),
+        sprintf(
+          "systemctl --user set-property --runtime %s %s MemorySwapMax=0",
+          slice,
+          shQuote(paste0("MemoryMax=", spec$memory_max))
+        )
+      )
+    }
+  }
+  paste(c(paste("cd", shQuote(spec$projdir)), setup, paste(run, collapse = " ")), collapse = " && ")
+}
+
 ## Build the argument vector for the `ssh` client that launches one worker:
 ##   c([-tt], [-R <fwd> -o ExitOnForwardFailure=yes], <ssh options>, <host>,
 ##     "cd <projdir> && <rscript> [r_arguments] -e '<call>'")
-## `spec` is a normalized crew_ssh_node (host/rscript/projdir/ssh_options
-## resolved); `call` is crew's crew_worker() call string. Paths and the call are
-## shQuote()d for the remote shell. `request_tty` prepends `-tt` (force a remote
-## pseudo-tty) so the remote R receives SIGHUP and dies when the local ssh client
-## is killed. `tunnel` (e.g. "49152:127.0.0.1:55000") adds a reverse port-forward
-## so the worker dials the dispatcher back over the ssh connection (no inbound
-## port needed). Pure + side-effect-free so it is unit-testable. Internal.
+## `spec` is a normalized crew_ssh_node (host/rscript/projdir/ssh_options/slice
+## resolved; see remote_command() for the slice form); `call` is crew's
+## crew_worker() call string. Paths and the call are shQuote()d for the remote
+## shell. `request_tty` prepends `-tt` (force a remote pseudo-tty) so the remote R
+## receives SIGHUP and dies when the local ssh client is killed. `tunnel` (e.g.
+## "49152:127.0.0.1:55000") adds a reverse port-forward so the worker dials the
+## dispatcher back over the ssh connection (no inbound port needed). Pure +
+## side-effect-free so it is unit-testable. Internal.
 build_ssh_args <- function(spec, call, r_arguments = NULL, request_tty = FALSE, tunnel = NULL) {
-  command <- c(shQuote(spec$rscript), r_arguments, "-e", shQuote(call))
-  remote <- sprintf("cd %s && %s", shQuote(spec$projdir), paste(command, collapse = " "))
+  remote <- remote_command(spec, c(r_arguments, "-e", shQuote(call)))
   tty <- if (isTRUE(request_tty)) "-tt"
   forward <- if (!is.null(tunnel)) c("-R", tunnel, "-o", "ExitOnForwardFailure=yes")
   c(tty, forward, spec$ssh_options, spec$host, remote)
