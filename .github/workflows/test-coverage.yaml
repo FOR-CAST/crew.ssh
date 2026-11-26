@@ -1,0 +1,50 @@
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+
+name: test-coverage
+
+permissions: read-all
+
+jobs:
+  test-coverage:
+    runs-on: ubuntu-latest
+    env:
+      ## at most 2 cores for the tests, as CRAN asks (tests/testthat/setup-cores.R)
+      OMP_THREAD_LIMIT: 2
+      OMP_NUM_THREADS: 2
+      OPENBLAS_NUM_THREADS: 2
+      MKL_NUM_THREADS: 2
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      CREW_SSH_TEST_INTEGRATION: "true" # enable the loopback integration test
+      ## Codecov refuses tokenless uploads to a protected branch; it is empty in Dependabot's runs
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::covr
+
+      - name: Set up passwordless SSH to localhost (for integration tests)
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
+          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          ssh-keyscan -H localhost 127.0.0.1 >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -o BatchMode=yes localhost true
+
+      - name: Test coverage
+        run: |
+          ## Dependabot's runs get no Actions secrets: test under covr, upload only with a token
+          cov <- covr::package_coverage()
+          if (nzchar(Sys.getenv("CODECOV_TOKEN"))) covr::codecov(coverage = cov) else print(cov)
+        shell: Rscript {0}
