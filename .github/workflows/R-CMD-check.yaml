@@ -3,8 +3,9 @@
 # this file is dormant (and is .Rbuildignore'd via ^\.github$).
 on:
   push:
-    branches: [main, master]
+    branches: [main, development]
   pull_request:
+    branches: [main, development]
 
 name: R-CMD-check
 
