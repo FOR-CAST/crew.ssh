@@ -1,6 +1,3 @@
-# Activates once crew.ssh is its own GitHub repository. While the package is
-# nested inside another repo, only that repo's root .github/workflows runs, so
-# this file is dormant (and is .Rbuildignore'd via ^\.github$).
 on:
   push:
     branches: [main, development]
